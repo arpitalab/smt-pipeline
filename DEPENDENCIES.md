@@ -26,19 +26,25 @@ No additional action required after cloning with `--recurse-submodules`.
 **Not bundled** (no redistribution license found).
 
 pEMv2 is required for Bayesian diffusivity classification
-(`tc.getBayesianDiffusivity()`). Install it manually:
+(`tc.getBayesianDiffusivity()`). The bootstrap confidence interval routine
+(`utils/pEMv2_bootstrap_CI.m`) is **included in this repo** (written
+in-house), but it calls internal pEMv2 functions (`EM`,
+`RandomInitialization`, `OptimalParameters`) that are part of the pEMv2
+package itself, so pEMv2 must still be installed separately.
+
+Install pEMv2 manually:
 
 1. Download from https://github.com/mcculloughlab/pEMv2 (or the lab's
    distribution page).
 2. Unzip so that the following exist on disk:
    ```
-   pEMv2-master/pEMv2/          % contains pEMv2.m, pEMv2_core.m, etc.
-   pEMv2-master/pEMv2_bootstrap_CI.m
+   pEMv2-master/pEMv2/              % contains EM.m, RandomInitialization.m, etc.
+   pEMv2-master/CovarianceModels/   % contains OptimalParameters.m
    ```
 3. Add both directories to the MATLAB path **before** calling any
    `getBayesianDiffusivity` method:
    ```matlab
    addpath('path/to/pEMv2-master/pEMv2');
-   addpath('path/to/pEMv2-master');
+   addpath('path/to/pEMv2-master/CovarianceModels');
    ```
    You may add these lines to `setup_path.m` once you know the local install path.
