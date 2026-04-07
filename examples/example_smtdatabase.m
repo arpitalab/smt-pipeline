@@ -17,6 +17,93 @@
 %% 0.  Add pipeline to the path
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_path.m'));
 
+% =========================================================================
+%% PART 0 (OPTIONAL): UPSTREAM SMD PROCESSING
+%
+% Skip this section if you already have CSV trajectory files or a saved
+% SMD .mat file — jump straight to Part A.
+%
+% This section shows how to run the full SMD localization-and-tracking
+% pipeline on a folder of TIFF or ND2 movies, save each result, and
+% collect the processed SMD objects into a TrajectoryCollection.
+%
+% The SMD class must be on the MATLAB path (it lives in sr_tracking/@SMD/).
+% =========================================================================
+
+%% 0a.  Set acquisition parameters (shared across all files in the batch)
+
+IMAGE_DIR    = 'path/to/tiff_or_nd2_files';   % <-- folder containing raw movies
+EXPOSURE_S   = 0.010;    % camera exposure time in seconds (e.g. 10 ms)
+FRAME_RATE   = 5;        % acquisition frame rate in Hz  (e.g. 5 Hz = 200 ms interval)
+SAVE_DIR     = 'path/to/smd_output';          % where to write processed .mat files
+CONDITION    = 'Control';
+
+% Create output folder if it does not exist
+if ~isfolder(SAVE_DIR), mkdir(SAVE_DIR); end
+
+%% 0b.  Process each movie file
+
+img_files = [dir(fullfile(IMAGE_DIR, '*.tif')); ...
+             dir(fullfile(IMAGE_DIR, '*.nd2'))];
+
+tc_from_smd = TrajectoryCollection();
+
+for k = 1:numel(img_files)
+    fname   = img_files(k).name;
+    fdir    = img_files(k).folder;
+    fprintf('\n[%d/%d] Processing %s\n', k, numel(img_files), fname);
+
+    % --- Construct SMD object -------------------------------------------
+    smd = SMD(fdir, fname, EXPOSURE_S, FRAME_RATE);
+
+    % Detection / localization settings
+    smd.detection_method        = 'wavelet'; % 'wavelet' (default) or 'llr'
+    smd.localization_threshold  = 1.75;      % wavelet threshold; lower = more spots
+    smd.localization_box        = 3;         % half-width of fitting box (pixels)
+    smd.pixelsize               = 0.160;     % µm/px
+
+    % For LLR detection instead of wavelet, uncomment and tune:
+    %   smd.detection_method = 'llr';
+    %   smd.noise_model      = 'gaussian';   % 'gaussian' or 'poisson'
+    %   smd.psf_sigma        = 1.3;          % PSF std dev in pixels
+    %   smd.llr_params.t     = 20.0;         % score threshold
+
+    % Tracking parameters
+    smd.tracking_params.trackingRadius     = 2;   % max displacement per frame (pixels)
+    smd.tracking_params.gapFrames          = 3;   % max gap (missing frames) to bridge
+    smd.tracking_params.minLengthBeforeGap = 4;   % min run length before first gap
+
+    % --- Run pipeline ---------------------------------------------------
+    smd.localize();   % detect spots and fit sub-pixel positions
+
+    % Nucleus / ROI mask (optional but recommended for nuclear proteins).
+    % Requires a matching fluorescence image or BF image in the same folder.
+    % Comment out if no mask is available; addFromSMD handles empty ROIs.
+    try
+        smd.get_roi();
+    catch ME
+        warning('get_roi failed for %s: %s', fname, ME.message);
+    end
+
+    smd.track();        % link localizations into trajectories
+    smd.cull_tracks();  % remove short / out-of-nucleus tracks
+
+    % --- Save the SMD object -------------------------------------------
+    [~, stem] = fileparts(fname);
+    save_path = fullfile(SAVE_DIR, [stem '_smd.mat']);
+    save(save_path, 'smd');
+    fprintf('    Saved → %s\n', save_path);
+
+    % --- Add to TrajectoryCollection -----------------------------------
+    tc_from_smd.addFromSMD(smd, 'FileID', num2str(k), 'Condition', CONDITION);
+end
+
+tc_from_smd.summary();
+
+% tc_from_smd is now equivalent to a collection built from CSV files.
+% Continue with Part A using tc_from_smd in place of tc, or proceed
+% directly to analysis and database registration below.
+
 %% 1.  Open (or create) the database
 %
 % If the .db file does not exist it is created automatically.
