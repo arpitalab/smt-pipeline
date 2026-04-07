@@ -23,6 +23,7 @@ classdef TrajectoryCollection < handle
         AllRawTracks       = {}           % Lazy: aggregated raw tracks
         AllCulledTracks    = {}           % Lazy: aggregated culled tracks
         AllRelativeTracks  = {}           % Lazy: aggregated relative tracks
+        RLResults          = struct()
         MSDResults         = struct()
         pEMResults         = struct()
         Params             = struct()
@@ -34,6 +35,7 @@ classdef TrajectoryCollection < handle
         IsAllRawCollected      = false
         IsAllCulledCollected   = false
         IsAllRelativeCollected = false
+        IsRLComputed           = false
         IsMSDComputed          = false
         IspEMComputed          = false
         IsBootstrapComputed    = false
@@ -234,13 +236,28 @@ classdef TrajectoryCollection < handle
             tracks = obj.AllRelativeTracks;
         end
 
-        %% MSD
-        function results = getMSD(obj, varargin)
-            if ~obj.IsMSDComputed
+        %% RL decomposition (Richardson-Lucy MSD distribution)
+        function results = getRLDecomposition(obj, varargin)
+            % GETRLDECOMPOSITION  Richardson-Lucy decomposition of the MSD distribution.
+            %
+            %   results = tc.getRLDecomposition('LagTime', 4, 'String', 'H2B')
+            %
+            %   Runs RL_HILO on culled tracks (or a condition subset) and stores
+            %   results in tc.RLResults.  Re-call with the same arguments returns
+            %   cached results; use 'ForceRecompute' to re-run.
+            %
+            %   Options:
+            %     'LagTime'        - frame lag for van Hove computation (default 4)
+            %     'String'         - label for figure titles (default 'Not specified')
+            %     'Condition'      - restrict to one condition (default: all)
+            %     'ForceRecompute' - logical; default false
+
+            if ~obj.IsRLComputed
                 p = inputParser;
-                addParameter(p, 'LagTime',   4);
-                addParameter(p, 'String',    'Not specified');
-                addParameter(p, 'Condition', [], @(x) ischar(x)||isstring(x)||iscell(x));
+                addParameter(p, 'LagTime',        4);
+                addParameter(p, 'String',          'Not specified');
+                addParameter(p, 'Condition',       [], @(x) ischar(x)||isstring(x)||iscell(x));
+                addParameter(p, 'ForceRecompute',  false, @islogical);
                 parse(p, varargin{:});
 
                 if isempty(p.Results.Condition)
@@ -250,7 +267,7 @@ classdef TrajectoryCollection < handle
                 end
 
                 if isempty(tracks)
-                    error('No tracks available for MSD computation.');
+                    error('No tracks available for RL decomposition.');
                 end
 
                 X = cell(1, numel(tracks));
@@ -260,10 +277,196 @@ classdef TrajectoryCollection < handle
                 tracklen = cellfun('size', tracks, 1);
                 idx      = find(tracklen > 6);
                 tmp{1}   = X(idx);
-                [M, P1norm, computed_quantities_1] = RL_HILO(tmp, p.Results.String, p.Results.LagTime);
-                obj.MSDResults.M                    = M;
-                obj.MSDResults.computed_quantities  = computed_quantities_1;
+                [M, ~, computed_quantities] = RL_HILO(tmp, p.Results.String, p.Results.LagTime);
+                obj.RLResults.M                   = M;
+                obj.RLResults.computed_quantities = computed_quantities;
+                obj.IsRLComputed = true;
+            end
+            results = obj.RLResults;
+        end
+
+        %% Ensemble MSD with bootstrap fitting
+        function results = getMSD(obj, varargin)
+            % GETMSD  Ensemble-averaged MSD with bootstrap power-law fits.
+            %
+            %   results = tc.getMSD()
+            %   results = tc.getMSD('TrackType',    'culled')   % 'culled'|'relative'|'raw'
+            %   results = tc.getMSD('MaxLag',       25)         % max lag in frames
+            %   results = tc.getMSD('NumBootstrap', 50)         % bootstrap samples
+            %   results = tc.getMSD('ExposureTime', 0.01)       % camera exposure (s)
+            %   results = tc.getMSD('Condition',    'Control')
+            %   results = tc.getMSD('ForceRecompute', true)
+            %
+            %   ExposureTime defaults to Params.exposure_time_s if set via TOML,
+            %   otherwise to the frame interval (frac = 1, i.e. stroboscopic).
+            %
+            %   Results struct fields:
+            %     .ensemble_mean  - [MaxLag x 1] ensemble-averaged MSD (µm²)
+            %     .lag_axis       - [MaxLag x 1] lag times in seconds
+            %     .lag_frames     - [MaxLag x 1] lag indices (1 … MaxLag)
+            %     .boot_means     - [MaxLag x NumBootstrap] per-bootstrap means
+            %     .boot_fits      - [NumBootstrap x 3] fit params [G, sigma_sq, alpha]
+            %     .dt             - frame interval (s)
+            %     .frac           - exposure / frame_interval ratio
+            %     .track_type     - which track set was used
+
+            if ~obj.IsMSDComputed
+                p = inputParser;
+                addParameter(p, 'TrackType',      'culled', @(x) ischar(x)||isstring(x));
+                addParameter(p, 'MaxLag',         25,       @isnumeric);
+                addParameter(p, 'NumBootstrap',   50,       @isnumeric);
+                addParameter(p, 'ExposureTime',   NaN,      @isnumeric);
+                addParameter(p, 'Condition',      [],       @(x) ischar(x)||isstring(x)||iscell(x));
+                addParameter(p, 'ForceRecompute', false,    @islogical);
+                parse(p, varargin{:});
+                o = p.Results;
+
+                % --- Get tracks -------------------------------------------
+                trackType = lower(char(o.TrackType));
+                switch trackType
+                    case 'culled'
+                        if isempty(o.Condition)
+                            tracks = obj.getAllCulledTracks();
+                        else
+                            tracks = obj.getTracksByCondition(o.Condition);
+                        end
+                    case 'relative'
+                        if isempty(o.Condition)
+                            tracks = obj.getAllRelativeTracks();
+                        else
+                            tracks = obj.getRelativeTracksByCondition(o.Condition);
+                        end
+                    case 'raw'
+                        if isempty(o.Condition)
+                            tracks = obj.getAllRawTracks();
+                        else
+                            tracks = obj.getTracksByCondition(o.Condition, 'UseRaw', true);
+                        end
+                    otherwise
+                        error('getMSD: TrackType must be ''culled'', ''relative'', or ''raw''.');
+                end
+
+                if isempty(tracks)
+                    error('getMSD: no tracks available (TrackType=''%s'').', trackType);
+                end
+
+                % --- Physical parameters ----------------------------------
+                dt = obj.getFrameIntervalForCondition(o.Condition);
+
+                expT = o.ExposureTime;
+                if isnan(expT) && isfield(obj.Params, 'exposure_time_s')
+                    expT = obj.Params.exposure_time_s;
+                end
+                if isnan(expT)
+                    frac = 1;   % assume stroboscopic (exposure = frame interval)
+                    warning('getMSD:noExposureTime', ...
+                        ['ExposureTime not set; assuming frac=1 (stroboscopic). ' ...
+                         'Pass ExposureTime or set exposure_time_s in your TOML.']);
+                else
+                    frac = expT / dt;
+                end
+
+                MaxLag = o.MaxLag;
+
+                % --- Gap-fill and per-track MSD ---------------------------
+                nTracks      = numel(tracks);
+                ensemble_msd  = cell(nTracks, 1);
+                ensemble_nlags = cell(nTracks, 1);
+
+                for ii = 1:nTracks
+                    t_raw = tracks{ii};
+                    x = t_raw(:, 1);
+                    y = t_raw(:, 2);
+                    if size(t_raw, 2) >= 3
+                        t = t_raw(:, 3) - t_raw(1, 3) + 1;   % 1-based frame index
+                    else
+                        t = (1:length(x))';
+                    end
+                    [t_u, x_u] = fillGapsWithNaN(t, x);
+                    [~,   y_u] = fillGapsWithNaN(t, y);
+                    [msd_i, nlags_i] = simple_msd([x_u, y_u], t_u);
+                    ensemble_msd{ii}   = msd_i;
+                    ensemble_nlags{ii} = nlags_i;
+                end
+
+                % --- Ensemble mean ----------------------------------------
+                msdlen = cellfun(@length, ensemble_msd);
+                N      = max(msdlen);
+                e_sum  = zeros(N, 1);   % weighted sum of MSDs
+                n_sum  = zeros(N, 1);   % total observation count at each lag
+
+                for ii = 1:nTracks
+                    L = msdlen(ii);
+                    e_sum(1:L) = e_sum(1:L) + ensemble_msd{ii};
+                    n_sum(1:L) = n_sum(1:L) + ensemble_nlags{ii};
+                end
+                n_sum(n_sum == 0) = NaN;
+                ensemble_mean_full = e_sum ./ n_sum;
+
+                % Trim to MaxLag
+                nLags         = min(MaxLag, N);
+                ensemble_mean = ensemble_mean_full(1:nLags);
+                lag_frames    = (1:nLags)';
+                lag_axis      = lag_frames * dt;
+
+                % --- Bootstrap -------------------------------------------
+                nBoot      = o.NumBootstrap;
+                boot_means = zeros(nLags, nBoot);
+                boot_fits  = zeros(nBoot, 3);
+
+                lsqOpts = optimoptions('lsqnonlin', ...
+                    'MaxFunctionEvaluations', 10000, ...
+                    'Display', 'none', ...
+                    'Algorithm', 'levenberg-marquardt');
+
+                x0  = [1e-4, 4e-4, 0.5];
+                lb  = [1e-5, 1e-6, 0.1];
+                ub  = [5,    4e-3, 1.5];
+
+                for isamp = 1:nBoot
+                    idx  = datasample(1:nTracks, nTracks);
+                    bs_sum  = zeros(N, 1);
+                    bs_n    = zeros(N, 1);
+                    for jj = 1:nTracks
+                        ii = idx(jj);
+                        L  = msdlen(ii);
+                        bs_sum(1:L) = bs_sum(1:L) + ensemble_msd{ii};
+                        bs_n(1:L)   = bs_n(1:L)   + ensemble_nlags{ii};
+                    end
+                    bs_n(bs_n == 0) = NaN;
+                    bm = bs_sum ./ bs_n;
+                    boot_means(:, isamp) = bm(1:nLags);
+
+                    bm_fit = bm(1:nLags);
+                    valid  = ~isnan(bm_fit) & bm_fit > 0;
+                    if sum(valid) >= 3
+                        try
+                            fp = lsqnonlin( ...
+                                @(x) my_fun(x, lag_frames(valid), bm_fit(valid), dt, frac), ...
+                                x0, lb, ub, lsqOpts);
+                            boot_fits(isamp, :) = fp;
+                        catch
+                            boot_fits(isamp, :) = NaN;
+                        end
+                    else
+                        boot_fits(isamp, :) = NaN;
+                    end
+                end
+
+                % --- Store ------------------------------------------------
+                obj.MSDResults.ensemble_mean = ensemble_mean;
+                obj.MSDResults.lag_axis      = lag_axis;
+                obj.MSDResults.lag_frames    = lag_frames;
+                obj.MSDResults.boot_means    = boot_means;
+                obj.MSDResults.boot_fits     = boot_fits;
+                obj.MSDResults.dt            = dt;
+                obj.MSDResults.frac          = frac;
+                obj.MSDResults.track_type    = trackType;
+                obj.MSDResults.n_tracks      = nTracks;
                 obj.IsMSDComputed = true;
+
+                fprintf('getMSD: %d tracks, dt=%.4fs, frac=%.3f, MaxLag=%d, %d bootstrap samples.\n', ...
+                    nTracks, dt, frac, nLags, nBoot);
             end
             results = obj.MSDResults;
         end
@@ -578,6 +781,13 @@ classdef TrajectoryCollection < handle
             fprintf('Lifetime recomputed.\n');
         end
 
+        function obj = recomputeRL(obj, varargin)
+            obj.IsRLComputed = false;
+            obj.RLResults    = struct();
+            obj.getRLDecomposition(varargin{:});
+            fprintf('RL decomposition recomputed.\n');
+        end
+
         function obj = recomputeMSD(obj, varargin)
             obj.IsMSDComputed = false;
             obj.MSDResults    = struct();
@@ -749,6 +959,30 @@ classdef TrajectoryCollection < handle
                 length(tracks), strjoin(condition, ', '));
         end
 
+        function tracks = getRelativeTracksByCondition(obj, condition)
+            % GETRELATIVETRACKSBYCONDITION  Return relative tracks for a condition.
+            if ischar(condition) || isstring(condition)
+                condition = {char(condition)};
+            end
+            matchIdx = false(size(obj.Metadata.Condition));
+            for c = condition(:)'
+                matchIdx = matchIdx | strcmp(obj.Metadata.Condition, c);
+            end
+            if ~any(matchIdx)
+                warning('No files found for condition(s): %s', strjoin(condition, ', '));
+                tracks = {};
+                return;
+            end
+            tracks = cell(0, 1);
+            for tw = obj.Wrappers(matchIdx)
+                rt = tw{1}.getRelativeTracks();
+                if ~isempty(rt)
+                    if ~iscolumn(rt), rt = rt(:); end
+                    tracks = [tracks; rt]; %#ok<AGROW>
+                end
+            end
+        end
+
         function summary(obj)
             fprintf('\n=== TrajectoryCollection Summary ===\n');
             fprintf('Number of files/wrappers: %d\n', length(obj.Wrappers));
@@ -784,6 +1018,7 @@ classdef TrajectoryCollection < handle
                 fprintf('Conditions           : (none specified)\n');
             end
 
+            fprintf('RL decomp computed   : %s\n', ifelse(obj.IsRLComputed,        'Yes', 'No'));
             fprintf('MSD computed         : %s\n', ifelse(obj.IsMSDComputed,       'Yes', 'No'));
             fprintf('Bayesian computed    : %s\n', ifelse(obj.IspEMComputed,       'Yes', 'No'));
             fprintf('Bootstrap CI computed: %s\n', ifelse(obj.IsBootstrapComputed, 'Yes', 'No'));
@@ -1034,12 +1269,14 @@ classdef TrajectoryCollection < handle
             obj.IsAllRawCollected      = false;
             obj.IsAllCulledCollected   = false;
             obj.IsAllRelativeCollected = false;
+            obj.IsRLComputed           = false;
             obj.IsMSDComputed          = false;
             obj.IspEMComputed          = false;
             obj.IsBootstrapComputed    = false;
             obj.AllRawTracks       = {};
             obj.AllCulledTracks    = {};
             obj.AllRelativeTracks  = {};
+            obj.RLResults          = struct();
             obj.MSDResults         = struct();
             obj.pEMResults             = struct();
             obj.pEMBootstrapInputs     = struct();

@@ -77,7 +77,7 @@ tc.summary();
 %           point; adjust based on your molecule's timescale.
 % String  : label used in figure titles only.
 
-results = tc.getMSD('LagTime', 4, 'String', 'H2B');
+results = tc.getRLDecomposition('LagTime', 4, 'String', 'H2B');
 
 %% 4.  (Optional) Save results
 %   tc.save('H2B_Control.mat');

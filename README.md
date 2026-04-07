@@ -84,7 +84,8 @@ tc.addFromFile('cell1.csv', 'Condition', 'Control');
 
 db.registerCollection(tc, 'Name', 'H2B_Control_1kPa_slow', 'Treatment', 'Control');
 
-tc.getMSD('LagTime', 4, 'String', 'H2B');
+tc.getRLDecomposition('LagTime', 4, 'String', 'H2B');
+tc.getMSD('ExposureTime', 0.01);             % ensemble MSD + bootstrap fits
 tc.getBayesianDiffusivity('Condition', 'Control');
 tc.save('results/H2B_Control_1kPa_slow.mat');
 

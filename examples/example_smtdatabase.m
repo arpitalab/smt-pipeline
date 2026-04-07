@@ -89,7 +89,7 @@ db.registerCollection(tc, ...
 % Run whichever analyses apply.  logAnalysis() (Step 6) extracts summaries
 % from the tc object, so call it right after each analysis completes.
 
-tc.getMSD('LagTime', 4, 'String', 'H2B Control');
+tc.getRLDecomposition('LagTime', 4, 'String', 'H2B Control');
 
 tc.getBayesianDiffusivity('Condition', 'Control');
 % tc.computeBootstrapCI();   % optional; takes longer
