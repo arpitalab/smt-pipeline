@@ -1,0 +1,40 @@
+# experiment.toml — SMT pipeline parameter file
+#
+# Pass this file to TrajectoryCollection.ReadParams() or
+# TrajectoryWrapper.readParams() at the start of an analysis session.
+#
+# Units are noted in each comment.  Keys are case-insensitive after parsing.
+
+# ---------------------------------------------------------------------------
+# Acquisition — camera and illumination settings
+# ---------------------------------------------------------------------------
+
+# Camera pixel size in µm.  Used to convert localization coordinates from
+# pixels to µm when loading CSV files.  Not applied to SMD-sourced tracks
+# (those are already in µm).
+pixel_size = 0.160          # µm/px  (e.g. 160 nm for a typical HILO setup)
+
+# Time between the start of consecutive frames (= 1 / frame_rate).
+# For a 10 ms exposure with 200 ms total frame period this is 0.2 s (5 Hz).
+# For a 10 ms exposure / 10 ms frame period this is 0.01 s (100 Hz).
+frame_interval = 0.2        # seconds
+
+# Camera exposure duration.  Together with frame_interval this sets the
+# motion-blur correction factor used by getMSD():
+#   frac = exposure_time_s / frame_interval
+# For stroboscopic illumination (exposure = frame_interval) frac = 1.
+# For short-pulse illumination (e.g. 10 ms exposure / 200 ms interval) frac = 0.05.
+exposure_time_s = 0.01      # seconds
+
+# ---------------------------------------------------------------------------
+# Track culling — applied inside TrajectoryWrapper.readData() and cull_tracks()
+# ---------------------------------------------------------------------------
+
+# Minimum number of localizations a track must contain to be kept at the
+# CSV-loading stage.  Shorter tracks are discarded before any further processing.
+minTrackLength = 5          # frames
+
+# Minimum number of consecutive localizations before the first gap in a track.
+# Tracks whose initial gap-free segment is shorter than this are rejected even
+# if the total track length exceeds minTrackLength.
+minLengthBeforeGap = 5      # frames
