@@ -34,8 +34,7 @@ package itself, so pEMv2 must still be installed separately.
 
 Install pEMv2 manually:
 
-1. Download from https://github.com/mcculloughlab/pEMv2 (or the lab's
-   distribution page).
+1. Download from https://github.com/p-koo/pEMv2
 2. Unzip so that the following exist on disk:
    ```
    pEMv2-master/pEMv2/              % contains EM.m, RandomInitialization.m, etc.
