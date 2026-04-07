@@ -31,7 +31,6 @@ run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_path.m'));
 DATA_DIR  = 'path/to/csv/files';
 TOML_FILE = 'path/to/experiment.toml';
 % Minimal experiment.toml:
-%   [acquisition]
 %   pixel_size      = 0.160   # µm/px
 %   frame_interval  = 0.020   # s  (50 Hz)
 %   exposure_time_s = 0.010   # s  (10 ms exposure)
@@ -84,52 +83,25 @@ msd_results = tc.getMSD( ...
 fprintf('\nEnsemble MSD: %d tracks, dt = %.4f s, frac = %.3f\n', ...
     msd_results.n_tracks, msd_results.dt, msd_results.frac);
 
-% Median fit parameters across bootstrap samples
 valid_fits = msd_results.boot_fits(~any(isnan(msd_results.boot_fits), 2), :);
 if ~isempty(valid_fits)
-    med_G     = median(valid_fits(:, 1));
-    med_sig2  = median(valid_fits(:, 2));
     med_alpha = median(valid_fits(:, 3));
     ci_alpha  = prctile(valid_fits(:, 3), [2.5, 97.5]);
-    fprintf('Median fit:  G = %.4f µm²/s^α,  σ² = %.4f µm²,  α = %.2f  [%.2f – %.2f]\n', ...
-        med_G, med_sig2, med_alpha, ci_alpha(1), ci_alpha(2));
+    fprintf('Median fit:  G = %.4f µm²/s^α,  σ² = %.4f µm²,  α = %.2f  [%.2f–%.2f]\n', ...
+        median(valid_fits(:,1)), median(valid_fits(:,2)), med_alpha, ci_alpha(1), ci_alpha(2));
 end
 
-%% 4.  Plot ensemble MSD with bootstrap confidence band
-tau   = msd_results.lag_axis;
-emsd  = msd_results.ensemble_mean;
-bmean = msd_results.boot_means;
+%% 4.  Plot ensemble MSD
+%
+% tc.plotMSD() produces one figure:
+%   - shaded 95% bootstrap CI band
+%   - ensemble mean line
+%   - median fBM fit curve with α in the legend
+%
+% Optional: 'ShowBootstraps', true overlays individual bootstrap fit curves.
 
-ci_lo = prctile(bmean, 2.5,  2);
-ci_hi = prctile(bmean, 97.5, 2);
-
-figure('Name', 'Ensemble MSD');
-patch([tau; flipud(tau)], [ci_lo; flipud(ci_hi)], [0.7 0.85 1], ...
-      'EdgeColor', 'none', 'FaceAlpha', 0.6);
-hold on;
-plot(tau, emsd, 'b-', 'LineWidth', 2);
-
-% Overlay median fit curve
-if ~isempty(valid_fits)
-    lag_vec = msd_results.lag_frames;
-    msd_fit = my_fun([med_G, med_sig2, med_alpha], lag_vec, emsd, ...
-                     msd_results.dt, msd_results.frac);
-    % my_fun returns residuals; reconstruct the model curve
-    G = med_G; a = med_alpha; s2 = med_sig2;
-    dt = msd_results.dt; fr = msd_results.frac;
-    b_vec = (abs(1 + fr./lag_vec).^(2+a) + abs(1-fr./lag_vec).^(2+a) - 2) ./ (fr./lag_vec).^2;
-    fit_curve = G/((1+a)*(2+a)) * ((dt.*lag_vec).^a .* b_vec - 2*(fr*dt)^a) + 2*s2;
-    plot(tau, fit_curve, 'r--', 'LineWidth', 1.5);
-    legend({'95% CI (bootstrap)', 'Ensemble mean', 'fBM fit (median)'}, 'Location', 'northwest');
-else
-    legend({'95% CI (bootstrap)', 'Ensemble mean'}, 'Location', 'northwest');
-end
-
-set(gca, 'XScale', 'log', 'YScale', 'log', 'FontSize', 14, 'LineWidth', 1);
-xlabel('\tau (s)');
-ylabel('MSD (\mum^2)');
-title('Ensemble MSD — Control');
-box off;
+tc.plotMSD('Title', 'H2B Control', 'Color', [0 0.4 0.8]);
+% tc.plotMSD('Title', 'H2B Control', 'ShowBootstraps', true);
 
 % =========================================================================
 %% PART B: Richardson-Lucy MSD decomposition  (tc.getRLDecomposition)
@@ -141,10 +113,6 @@ box off;
 %           Use a lag where mobile and immobile populations are well separated
 %           (typically 1–5 for slow imaging, higher for fast).
 % String  : label for figure titles only.
-%
-% Produces two figures automatically:
-%   Fig A: G(r,τ) — van Hove correlation, measured vs. RL fit
-%   Fig B: P(MSD) — deconvolved MSD probability distribution
 
 rl_results = tc.getRLDecomposition('LagTime', 4, 'String', 'H2B Control');
 
@@ -161,37 +129,21 @@ rl_results = tc.getRLDecomposition('LagTime', 4, 'String', 'H2B Control');
 %       .msderr           – 99% CI on state MSDs
 %       .fits             – power-law fit params per state
 
-cq       = rl_results.computed_quantities;
-n_states = numel(cq.classified_tracks);
+cq = rl_results.computed_quantities;
 fprintf('\nRL decomposition: %d mobility state(s) at lag %d.\n', ...
-    n_states, cq.lagtime);
-for s = 1:n_states
+    numel(cq.classified_tracks), cq.lagtime);
+for s = 1:numel(cq.classified_tracks)
     fprintf('  State %d: %d tracks\n', s, numel(cq.classified_tracks{s}));
 end
 
-%% 7.  Plot per-state ensemble MSD from RL classification
+%% 7.  Plot RL results
 %
-% The RL method classifies each track into a mobility state.
-% Here we plot the ensemble MSD for each state on the same axes.
+% tc.plotRLDecomposition() produces three figures:
+%   Fig 1 – van Hove G(r,τ): measured data vs. RL fit
+%   Fig 2 – P(MSD): Richardson-Lucy deconvolved MSD distribution
+%   Fig 3 – Per-state ensemble MSD with 99% CI error bars
 
-dt     = tc.Wrappers{1}.getFrameInterval();
-n_lags = size(cq.msd, 1);
-tau_rl = (1:n_lags)' * dt;
-
-figure('Name', 'RL per-state MSD');
-colors = lines(n_states);
-hold on;
-for s = 1:n_states
-    errorbar(tau_rl, cq.msd(:, s), cq.msderr(:, s), ...
-             'Color', colors(s, :), 'LineWidth', 1.5, ...
-             'DisplayName', sprintf('State %d  (n=%d)', s, numel(cq.classified_tracks{s})));
-end
-set(gca, 'XScale', 'log', 'YScale', 'log', 'FontSize', 14, 'LineWidth', 1);
-xlabel('\tau (s)');
-ylabel('MSD (\mum^2)');
-title('Per-state MSD — H2B Control');
-legend('show', 'Location', 'northwest');
-box off;
+tc.plotRLDecomposition('Title', 'H2B Control');
 
 %% 8.  (Optional) Save
 %   tc.save('H2B_Control.mat');

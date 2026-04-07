@@ -834,6 +834,160 @@ classdef TrajectoryCollection < handle
             hold off;
         end
 
+        function figs = plotMSD(obj, varargin)
+            % PLOTMSD  Plot ensemble MSD with bootstrap CI and median fBM fit.
+            %
+            %   figs = tc.plotMSD()
+            %   figs = tc.plotMSD('Color',  [0 0.4 0.8])
+            %   figs = tc.plotMSD('Title',  'H2B Control')
+            %   figs = tc.plotMSD('ShowBootstraps', true)   % overlay individual fits
+            %
+            % Returns a figure handle.  Call tc.getMSD() first.
+
+            if ~obj.IsMSDComputed
+                error('plotMSD: run tc.getMSD() first.');
+            end
+
+            p = inputParser;
+            addParameter(p, 'Color',          [0 0.4 0.8], @isnumeric);
+            addParameter(p, 'Title',          '',          @(x) ischar(x)||isstring(x));
+            addParameter(p, 'ShowBootstraps', false,       @islogical);
+            parse(p, varargin{:});
+
+            r      = obj.MSDResults;
+            tau    = r.lag_axis;
+            emsd   = r.ensemble_mean;
+            bmeans = r.boot_means;
+            bfits  = r.boot_fits;
+            dt     = r.dt;
+            frac   = r.frac;
+            lags   = r.lag_frames;
+            clr    = p.Results.Color;
+
+            ci_lo = prctile(bmeans, 2.5,  2);
+            ci_hi = prctile(bmeans, 97.5, 2);
+
+            figs = figure('Name', 'Ensemble MSD');
+            patch([tau; flipud(tau)], [ci_lo; flipud(ci_hi)], clr, ...
+                  'EdgeColor', 'none', 'FaceAlpha', 0.25);
+            hold on;
+
+            % Individual bootstrap fit curves (optional)
+            if p.Results.ShowBootstraps
+                for b = 1:size(bfits, 1)
+                    fp = bfits(b, :);
+                    if any(isnan(fp)), continue; end
+                    fc = msd_model_curve(fp, lags, dt, frac);
+                    plot(tau, fc, 'Color', [clr 0.08], 'LineWidth', 0.5);
+                end
+            end
+
+            % Ensemble mean
+            plot(tau, emsd, '-', 'Color', clr, 'LineWidth', 2.5);
+
+            % Median fit curve
+            valid = bfits(~any(isnan(bfits), 2), :);
+            if ~isempty(valid)
+                med_fp   = median(valid, 1);
+                fit_crv  = msd_model_curve(med_fp, lags, dt, frac);
+                plot(tau, fit_crv, '--', 'Color', clr * 0.6, 'LineWidth', 1.5);
+                med_alpha = med_fp(3);
+                ci_alpha  = prctile(valid(:,3), [2.5 97.5]);
+                legend({'95% CI', 'Ensemble mean', ...
+                        sprintf('fBM fit  \\alpha=%.2f [%.2f–%.2f]', ...
+                            med_alpha, ci_alpha(1), ci_alpha(2))}, ...
+                       'Location', 'northwest', 'Box', 'off');
+            else
+                legend({'95% CI', 'Ensemble mean'}, 'Location', 'northwest', 'Box', 'off');
+            end
+
+            set(gca, 'XScale', 'log', 'YScale', 'log', ...
+                     'FontSize', 18, 'FontWeight', 'bold', 'LineWidth', 1.5);
+            xlabel('\tau (s)');
+            ylabel('MSD (\mum^2)');
+            ttl = char(p.Results.Title);
+            if isempty(ttl)
+                ttl = sprintf('Ensemble MSD  (n=%d tracks)', r.n_tracks);
+            end
+            title(ttl);
+            axis square; box off;
+        end
+
+        function figs = plotRLDecomposition(obj, varargin)
+            % PLOTRLDECOMPOSITION  Reproduce the standard RL analysis figures
+            %                      from stored results without re-running RL_HILO.
+            %
+            %   figs = tc.plotRLDecomposition()
+            %   figs = tc.plotRLDecomposition('Title', 'H2B Control')
+            %
+            % Produces three figures:
+            %   Fig 1 – van Hove correlation G(r,τ): data + RL fit
+            %   Fig 2 – P(MSD): Richardson-Lucy deconvolved MSD distribution
+            %   Fig 3 – Per-state ensemble MSD with 99% CI error bars
+            %
+            % Call tc.getRLDecomposition() first.
+
+            if ~obj.IsRLComputed
+                error('plotRLDecomposition: run tc.getRLDecomposition() first.');
+            end
+
+            p = inputParser;
+            addParameter(p, 'Title', '', @(x) ischar(x)||isstring(x));
+            parse(p, varargin{:});
+
+            cq      = obj.RLResults.computed_quantities;
+            ttl     = char(p.Results.Title);
+            if isempty(ttl), ttl = cq.ident; end
+
+            dt      = obj.getFrameIntervalForCondition([]);
+            n_lags  = size(cq.msd, 1);
+            tau_rl  = (1:n_lags)' * dt;
+            n_states = numel(cq.classified_tracks);
+            colors   = lines(n_states);
+
+            % --- Fig 1: van Hove correlation ---------------------------------
+            figs(1) = figure('Name', 'van Hove correlation');
+            plot(cq.x, cq.vanHove, 'ko', 'MarkerSize', 8, 'MarkerFaceColor', 'none');
+            hold on;
+            plot(cq.x, cq.Gs, 'r-', 'LineWidth', 2);
+            set(gca, 'YScale', 'log', 'FontSize', 24, 'FontWeight', 'bold', 'LineWidth', 1);
+            xlabel('r  (\mum)');
+            ylabel('G(r,\tau)');
+            axis([0 1 1e-4 100]);
+            axis square; box off;
+            title(ttl);
+            legend({'Data', 'RL fit'}, 'Location', 'northeast', 'Box', 'off');
+
+            % --- Fig 2: P(MSD) -----------------------------------------------
+            figs(2) = figure('Name', 'P(MSD)');
+            semilogx(obj.RLResults.M, cq.P1norm, 'k-', 'LineWidth', 2);
+            set(gca, 'FontSize', 24, 'FontWeight', 'bold', 'LineWidth', 1);
+            xlabel('MSD  (\mum^2)');
+            ylabel('P(MSD)');
+            axis([1e-3 2e-1 0 max(cq.P1norm) * 1.1]);
+            title(ttl);
+            box off;
+
+            % --- Fig 3: per-state ensemble MSD -------------------------------
+            figs(3) = figure('Name', 'Per-state MSD');
+            hold on;
+            for s = 1:n_states
+                n_s = numel(cq.classified_tracks{s});
+                if n_s == 0, continue; end
+                errorbar(tau_rl, cq.msd(:, s), cq.msderr(:, s), ...
+                         '-o', 'Color', colors(s, :), 'LineWidth', 1.5, ...
+                         'MarkerSize', 4, 'CapSize', 3, ...
+                         'DisplayName', sprintf('State %d  (n=%d)', s, n_s));
+            end
+            set(gca, 'XScale', 'log', 'YScale', 'log', ...
+                     'FontSize', 18, 'FontWeight', 'bold', 'LineWidth', 1.5);
+            xlabel('\tau (s)');
+            ylabel('MSD  (\mum^2)');
+            title([ttl '  —  per-state MSD']);
+            legend('show', 'Location', 'northwest', 'Box', 'off');
+            axis square; box off;
+        end
+
         function globalfig = plotpEMstats(obj)
             if ~obj.IspEMComputed
                 warning('First compute pEM');
@@ -1296,6 +1450,14 @@ end
 % -------------------------------------------------------------------------
 function str = ifelse(cond, t, f)
     if cond, str = t; else, str = f; end
+end
+
+function curve = msd_model_curve(fp, lags, dt, frac)
+% Reconstruct fBM MSD model values from fit parameters.
+%   fp = [G, sigma_sq, alpha]; lags = integer lag indices.
+G = fp(1); sig2 = fp(2); alpha = fp(3);
+b     = (abs(1 + frac./lags).^(2+alpha) + abs(1-frac./lags).^(2+alpha) - 2) ./ (frac./lags).^2;
+curve = G / ((1+alpha)*(2+alpha)) .* ((dt.*lags).^alpha .* b - 2*(frac*dt)^alpha) + 2*sig2;
 end
 
 function s = mergeStructs(s1, s2)
