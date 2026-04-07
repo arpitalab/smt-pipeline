@@ -299,6 +299,12 @@ smt-pipeline/
 │   ├── relativeTracksFromForest.m
 │   ├── find_bound_particles_2.m
 │   ├── fun_v.m
+│   ├── fillGapsWithNaN.m     % insert NaN at missing frames
+│   ├── simple_msd.m          % per-track MSD supporting gapped trajectories
+│   ├── my_fun.m              % fBM MSD model for lsqnonlin fitting
+│   ├── calc_MME.m
+│   ├── calc_phi_r.m
+│   ├── calc_phi_r_allpairs.m
 │   └── RL_analysis/          % MSD, van Hove, pEM helpers
 ├── third_party/
 │   └── matlab-toml/          % git submodule (MIT license)
