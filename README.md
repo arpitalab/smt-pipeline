@@ -1,10 +1,20 @@
 # smt-pipeline
 
 MATLAB toolbox for single-molecule tracking (SMT) analysis built around
-`TrajectoryWrapper` and `TrajectoryCollection`. It loads per-cell CSV trajectory
-files, culls tracks by nucleus mask and quality criteria, removes global cell
-motion, and runs MSD, Bayesian diffusivity (pEM), van Hove, and lifetime
-analyses.
+`TrajectoryWrapper` and `TrajectoryCollection`. Trajectories can be loaded from
+two sources:
+
+- **CSV files** produced by [quot](https://github.com/alecheckert/quot), a
+  Python-based single-molecule localizer and tracker
+- **SMD objects** produced by the
+  [SMD tracking pipeline](https://github.com/arpitalab/sr_tracking), a
+  MATLAB-based localization and tracking pipeline for TIFF and ND2 movies
+
+Both paths produce identical `TrajectoryWrapper` objects that flow into the same
+downstream analyses: track culling by nucleus mask and quality criteria, global
+cell-motion removal, ensemble MSD, Richardson-Lucy MSD decomposition, Bayesian
+diffusivity classification (pEM), van Hove correlation, and particle lifetime
+analysis.
 
 ---
 
@@ -38,25 +48,41 @@ run('path/to/smt-pipeline/setup_path.m')
 
 ## Quick start
 
+**From quot CSV files:**
+
 ```matlab
 run('setup_path.m')
 
-files = dir('data/*.csv');
 tc = TrajectoryCollection();
 tc.ReadParams('experiment.toml');   % sets PixelSize, FrameInterval, etc.
 
+files = dir('data/*.csv');
 for k = 1:numel(files)
     tc.addFromFile(fullfile(files(k).folder, files(k).name), ...
-                   'FileID',    num2str(k), ...
-                   'Condition', 'Control');
+                   'FileID', num2str(k), 'Condition', 'Control');
 end
 
 tc.summary();
 tc.getBayesianDiffusivity('Condition', 'Control');
 ```
 
-See [examples/example_workflow.m](examples/example_workflow.m) for a
-fully-commented end-to-end script.
+**From SMD objects** (after running `smd.localize()` → `smd.track()` → `smd.cull_tracks()`):
+
+```matlab
+run('setup_path.m')
+
+tc = TrajectoryCollection();
+for k = 1:numel(smd_list)
+    tc.addFromSMD(smd_list{k}, 'FileID', num2str(k), 'Condition', 'Control');
+end
+
+tc.summary();
+tc.getBayesianDiffusivity('Condition', 'Control');
+```
+
+See [examples/example_workflow.m](examples/example_workflow.m) and
+[examples/example_smd_to_rl_msd.m](examples/example_smd_to_rl_msd.m) for
+fully-commented end-to-end scripts.
 
 ---
 
