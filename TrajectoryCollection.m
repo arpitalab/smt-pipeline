@@ -282,6 +282,8 @@ classdef TrajectoryCollection < handle
             addParameter(p, 'Condition',      [], @(x) ischar(x)||isstring(x)||iscell(x));
             addParameter(p, 'ForceRecompute', [], @islogical);
             addParameter(p, 'MinLength',       6, @isnumeric);
+            addParameter(p, 'SplitLength',     7, @isnumeric);
+            addParameter(p, 'NumFeatures',    [], @isnumeric);  % default: splitLength-1, max 10
             parse(p, varargin{:});
             opts = p.Results;
 
@@ -325,11 +327,15 @@ classdef TrajectoryCollection < handle
 
             if force
                 fprintf('Analyzing (%d tracks)\n', numel(tracks));
-                splitLength    = 7;
+                splitLength = opts.SplitLength;
+                if isempty(opts.NumFeatures)
+                    numFeatures = min(splitLength - 1, 10);
+                else
+                    numFeatures = opts.NumFeatures;
+                end
                 dE             = 0.01;
                 minStates      = 1;
                 maxStates      = 8;
-                numFeatures    = 3;
                 numReinitialize = 20;
                 numPerturb      = 200;
                 maxiter         = 10000;
@@ -828,6 +834,114 @@ classdef TrajectoryCollection < handle
             singleTrack = allTracks{trackIdx};
         end
 
+        %% Save
+        function save(obj, filename)
+            % SAVE  Persist the TrajectoryCollection to a .mat file.
+            %
+            %   tc.save('results.mat')
+            %
+            %   Reload with:
+            %     data = load('results.mat');  tc = data.tc;
+            %     tc.reloadTracks()            % optional: rebuild track data from CSVs
+            %
+            %   Track matrices (RawTracks / RelativeTracks) are automatically
+            %   stripped from each Wrapper at serialization time via saveobj —
+            %   the live in-memory object is NOT modified.  All analysis results
+            %   (pEM, bootstrap CI, MSD, lifetime) and enough metadata to
+            %   reconstruct tracks (file paths, ROIs, Parameters, PixelSize,
+            %   FrameInterval) are preserved.
+            %
+            %   Typical file sizes:
+            %     Without tracks : ~100-400 MB  (dominated by pEMBootstrapInputs)
+            %     tc.reloadTracks() : 5-10 min to rebuild from original CSVs
+
+            if ~endsWith(filename, '.mat')
+                filename = [filename '.mat'];
+            end
+
+            % Clear TC-level track caches — they are derived from Wrapper tracks
+            % and will be stale after a save/load cycle anyway.
+            obj.AllRawTracks           = {};
+            obj.AllCulledTracks        = {};
+            obj.AllRelativeTracks      = {};
+            obj.IsAllRawCollected      = false;
+            obj.IsAllCulledCollected   = false;
+            obj.IsAllRelativeCollected = false;
+
+            tc = obj; %#ok<NASGU>
+            saveTCToFile(filename, tc);
+            fprintf('Saved TrajectoryCollection (%d wrappers) to %s\n', ...
+                numel(obj.Wrappers), filename);
+        end
+
+        %% Reload tracks from original CSV files
+        function reloadTracks(obj, varargin)
+            % RELOADTRACKS  Rebuild RawTracks in each Wrapper from original CSV files.
+            %
+            %   tc.reloadTracks()
+            %   tc.reloadTracks('OldRoot', '/old/mount/', 'NewRoot', '/new/mount/')
+            %
+            %   Call this after loading a saved TrajectoryCollection to restore
+            %   track data.  Analysis results (pEM, MSD, etc.) are unaffected.
+            %
+            %   If CSV files were added with absolute paths (recommended), no
+            %   arguments are needed — reloadTracks() finds them automatically.
+            %
+            %   Name-value options:
+            %     'OldRoot' / 'NewRoot' - pair that replaces a path prefix when
+            %                    data has moved (e.g. different mount point).
+            %                    Both must be supplied together.
+            %                    E.g.: 'OldRoot','/lab/server/', 'NewRoot','/Volumes/Lab/'
+            %                    preserves subdirectory structure under the new root.
+
+            p = inputParser;
+            addParameter(p, 'OldRoot', '', @ischar);
+            addParameter(p, 'NewRoot', '', @ischar);
+            parse(p, varargin{:});
+            oldRoot = p.Results.OldRoot;
+            newRoot = p.Results.NewRoot;
+
+            nReloaded = 0;
+            for i = 1:numel(obj.Wrappers)
+                tw = obj.Wrappers{i};
+
+                if ~isempty(tw.getRawTracks())
+                    continue;   % already has tracks
+                end
+
+                if ~strcmp(tw.SourceType, 'csv')
+                    warning('TrajectoryCollection:reloadTracks', ...
+                        'Wrapper %d is SMD-sourced; tracks cannot be reloaded from CSV.', i);
+                    continue;
+                end
+
+                fname = tw.FileName;
+                if ~isempty(oldRoot) && ~isempty(newRoot) && startsWith(fname, oldRoot)
+                    fname = fullfile(newRoot, fname(numel(oldRoot)+1:end));
+                end
+
+                if isempty(fname) || ~isfile(fname)
+                    warning('TrajectoryCollection:reloadTracks', ...
+                        'File not found for wrapper %d: %s', i, fname);
+                    continue;
+                end
+
+                wasRelative = tw.IsRelative;
+                tw.readData(fname);
+                % ROIs were preserved by saveobj/loadobj — no need to re-run loadNucleusMask
+                if tw.IsCulled || ~isempty(tw.ROIs)
+                    tw.cull_tracks();
+                    if wasRelative
+                        tw.remove_relative_motion();
+                    end
+                end
+                nReloaded = nReloaded + 1;
+            end
+
+            obj.invalidateCollections();
+            fprintf('Reloaded tracks for %d/%d wrappers.\n', nReloaded, numel(obj.Wrappers));
+        end
+
     end % public methods
 
     methods (Access = private)
@@ -955,3 +1069,4 @@ function s = mergeStructs(s1, s2)
     end
 end
 
+R

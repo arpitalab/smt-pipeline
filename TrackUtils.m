@@ -6,23 +6,27 @@ classdef TrackUtils
 
     methods (Static)
 
-        function culled = cullTracksCore(tracks, ROIs, frameCol, minLen)
+        function [culled, rawIndices, startFrames] = cullTracksCore(tracks, ROIs, frameCol, minLen)
         % CULLTRACKSCORE  ROI filter + gap-consistency filter.
         %
-        %   culled = TrackUtils.cullTracksCore(tracks, ROIs, frameCol, minLen)
+        %   [culled, rawIndices, startFrames] = TrackUtils.cullTracksCore(tracks, ROIs, frameCol, minLen)
         %
-        %   tracks   - cell array of NxM matrices; cols 1:2 are x,y in pixels
-        %   ROIs     - cell array of [x, y] polygon vertex arrays (pixel coords)
+        %   tracks   - cell array of NxM matrices; cols 1:2 are x,y in µm
+        %   ROIs     - cell array of [x, y] polygon vertex arrays (µm coords)
         %   frameCol - column index that holds the frame number
         %   minLen   - minimum consecutive frames before the first gap
         %              (minLengthBeforeGap parameter)
         %
-        %   Returns culled: cell of tracks that (a) lie predominantly inside
-        %   an ROI and (b) pass the gap-consistency criterion.
-        %   ROI identity is appended as the last column of each track matrix.
+        %   Returns:
+        %     culled      - cell of surviving tracks with ROI_ID appended as last column
+        %     rawIndices  - 1xK integer vector; rawIndices(k) is the index of culled{k}
+        %                   in the input tracks cell array
+        %     startFrames - 1xK vector; startFrames(k) is the frame number at which
+        %                   culled{k} begins (after gap-based start trimming)
 
-            ntracks = length(tracks);
-            culled  = {};
+            ntracks    = length(tracks);
+            culled     = {};
+            rawIdxPre  = zeros(1, ntracks);
             k = 1;
 
             for ii = 1:ntracks
@@ -44,28 +48,43 @@ classdef TrackUtils
                 end
 
                 if ROI_belong > 0
-                    culled{k}             = tracks{ii};
-                    culled{k}(:, end+1)   = ROI_belong;
+                    culled{k}           = tracks{ii};
+                    culled{k}(:,end+1)  = ROI_belong;
+                    rawIdxPre(k)        = ii;
                     k = k + 1;
                 end
             end
 
-            culled = TrackUtils.filterFragmentsWithInitialGaps(culled, frameCol, minLen);
+            rawIdxPre = rawIdxPre(1:k-1);
+
+            [culled, keepMask, startFrames] = ...
+                TrackUtils.filterFragmentsWithInitialGaps(culled, frameCol, minLen);
+            rawIndices = rawIdxPre(keepMask);
         end
 
         % ------------------------------------------------------------------
 
-        function frags = filterFragmentsWithInitialGaps(frags, frameCol, M)
+        function [frags, keepMask, startFrames] = filterFragmentsWithInitialGaps(frags, frameCol, M)
         % FILTERFRAGMENTSWITHINITIALGAPS  Discard fragments with early gaps.
         %
-        %   frags = TrackUtils.filterFragmentsWithInitialGaps(frags, frameCol, M)
+        %   [frags, keepMask, startFrames] = TrackUtils.filterFragmentsWithInitialGaps(frags, frameCol, M)
         %
-        %   frags    - cell array of NxK matrices
-        %   frameCol - column index holding the frame number
-        %   M        - required number of consecutive frames at the start
+        %   frags      - cell array of NxK matrices
+        %   frameCol   - column index holding the frame number
+        %   M          - required number of consecutive frames at the start
+        %
+        %   Returns:
+        %     frags       - surviving fragments, each trimmed to the valid start
+        %     keepMask    - 1xN logical; true for each input fragment that survived
+        %     startFrames - 1xS vector (S = nnz(keepMask)); frame number at the
+        %                   start of each surviving fragment after trimming
 
-            validFragments = {};
-            for i = 1:length(frags)
+            n           = length(frags);
+            validFrags  = {};
+            keepMask    = false(1, n);
+            startFrames = zeros(1, n);   % over-allocated; trimmed at end
+
+            for i = 1:n
                 frag = frags{i};
                 if size(frag, 1) < M
                     continue;
@@ -76,10 +95,14 @@ classdef TrackUtils
 
                 startIdx = TrackUtils.findValidStart(frames, M);
                 if ~isempty(startIdx)
-                    validFragments{end+1} = frag(startIdx:end, :); %#ok<AGROW>
+                    validFrags{end+1}  = frag(startIdx:end, :); %#ok<AGROW>
+                    keepMask(i)        = true;
+                    startFrames(i)     = frames(startIdx);
                 end
             end
-            frags = validFragments;
+
+            frags       = validFrags;
+            startFrames = startFrames(keepMask);
         end
 
         % ------------------------------------------------------------------

@@ -16,15 +16,26 @@ classdef TrajectoryWrapper < handle
     % Common workflow (SMD):
     %   smd.localize(); smd.track(); smd.get_roi(); smd.cull_tracks();
     %   tw = TrajectoryWrapper.fromSMD(smd);
+    %
+    % Storage model
+    % -------------
+    % After cull_tracks(), every track in RawTracks is Nx5:
+    %   cols 1-4 : x (µm), y (µm), frame (1-based), SNR
+    %   col  5   : ROI_ID  (> 0 = passed culling; -1 = rejected)
+    %
+    % Tracks that pass culling are trimmed to their valid start frame.
+    % Rejected tracks keep their original data with col 5 set to -1.
+    % getCulledTracks() is a simple filter: tracks where col5 > 0.
+    %
+    % Before cull_tracks() is called, RawTracks entries are Nx4 (no col 5).
 
     properties (SetAccess = private)
-        RawTracks        % Cell array: all trajectories (Nx4: x,y,frame,SNR)
-        CulledTracks     % Cell array: filtered trajectories (Nx5: x,y,frame,SNR,ROI_ID)
+        RawTracks        % Cell array of track matrices; Nx4 before culling, Nx5 after
         RelativeTracks   % Cell array: tracks with global cell motion subtracted out
         ROIs             % Nucleus mask (cell array of [x,y] polygon arrays)
         Parameters       % User-defined struct
-        FileName         % List of loaded CSV files
-        IsCulled  = false  % Flag: culling performed
+        FileName         % Path to the loaded CSV file
+        IsCulled  = false  % Flag: cull_tracks() has been run
         IsRelative = false % Flag: relative motion removed
         PixelSize     double = 0.165  % µm/px; camera constant; overridable via TOML
         FrameInterval double = NaN    % seconds; experiment-specific; must be set via TOML
@@ -45,11 +56,10 @@ classdef TrajectoryWrapper < handle
             addParameter(p, 'FrameInterval', NaN);
             parse(p, varargin{:});
 
-            obj.Parameters    = p.Results.Parameters;
-            obj.PixelSize     = p.Results.PixelSize;
-            obj.FrameInterval = p.Results.FrameInterval;
-            obj.RawTracks     = {};
-            obj.CulledTracks  = {};
+            obj.Parameters     = p.Results.Parameters;
+            obj.PixelSize      = p.Results.PixelSize;
+            obj.FrameInterval  = p.Results.FrameInterval;
+            obj.RawTracks      = {};
             obj.RelativeTracks = {};
         end
 
@@ -60,6 +70,8 @@ classdef TrajectoryWrapper < handle
             % x,y coordinates from the Python tracker are in pixels and are
             % converted to µm on load using PixelSize.  Set PixelSize (via the
             % constructor or readParams) before calling readData.
+            % Frame numbers are 0-based in the CSV (Python convention) and are
+            % shifted to 1-based here.
             tbl  = readtable(csvFile, 'PreserveVariableNames', true);
             data = table2array(tbl(:, [1, 2, 16, 11, 18]));
             tracks = {};
@@ -72,6 +84,7 @@ classdef TrajectoryWrapper < handle
                 if length(idx) > obj.Parameters.minTrackLength
                     t        = data(idx, 1:4);
                     t(:,1:2) = t(:,1:2) * obj.PixelSize;   % px → µm
+                    t(:,3)   = t(:,3) + 1;                  % 0-based → 1-based frames
                     tracks{kk} = t;
                     kk = kk + 1;
                 end
@@ -116,32 +129,53 @@ classdef TrajectoryWrapper < handle
 
         %% Load nucleus mask from file (CSV path)
         function obj = loadNucleusMask(obj)
-            % Finds the matching CellPose .mat mask file from FileName pattern.
+            % Finds the matching CellPose .mat mask file for the loaded CSV.
+            % The mask is expected to be in the parent directory of the CSV file.
             expr   = '_s(\d{3})_';
-            tokens = regexp({obj.FileName}, expr, 'tokens');
-            sxxx   = cellfun(@(c) c{1}{1}, tokens, 'UniformOutput', false);
-            pattern = ['*s*', sxxx{1}, '_002_mask.mat'];
-            maskFiles = dir(['../', pattern]);
-            if isempty(maskFiles)
-                pattern   = ['*s*', sxxx{1}, '_mask.mat'];
-                maskFiles = dir(['../', pattern]);
+            tokens = regexp(obj.FileName, expr, 'tokens');
+            if isempty(tokens)
+                warning('TrajectoryWrapper:noSampleToken', ...
+                    'Could not parse sample ID from filename: %s', obj.FileName);
+                return;
             end
+            sxxx = tokens{1}{1};
+
+            % Search for mask files relative to the CSV file location
+            [csvDir, ~, ~] = fileparts(obj.FileName);
+            if isempty(csvDir)
+                csvDir = pwd;
+            end
+            searchDir = fullfile(csvDir, '..');
+
+            pattern   = ['*s*', sxxx, '_002_mask.mat'];
+            maskFiles = dir(fullfile(searchDir, pattern));
+            if isempty(maskFiles)
+                pattern   = ['*s*', sxxx, '_mask.mat'];
+                maskFiles = dir(fullfile(searchDir, pattern));
+            end
+
             if ~isempty(maskFiles)
-                mask = load(['../', maskFiles.name]);
-                bdry = bwboundaries(mask.mask);
+                maskPath = fullfile(maskFiles(1).folder, maskFiles(1).name);
+                mask     = load(maskPath);
+                bdry     = bwboundaries(mask.mask);
                 for iroi = 1:length(bdry)
                     x = bdry{iroi}(:,1) * obj.PixelSize;   % px → µm
                     y = bdry{iroi}(:,2) * obj.PixelSize;
                     bdry{iroi} = [x y];
                 end
                 obj.ROIs = bdry;
+            else
+                warning('TrajectoryWrapper:maskNotFound', ...
+                    'No mask file found for sample %s in %s', sxxx, searchDir);
             end
         end
 
         %% Cull tracks using ROI membership + gap-consistency filter
         function culled_tracks = cull_tracks(obj)
-            % Keeps only tracks that lie predominantly inside an ROI and
-            % have no gaps in the first minLengthBeforeGap frames.
+            % Assigns ROI membership to every track and updates RawTracks in-place.
+            % After this call, every RawTracks{k} is Nx5:
+            %   col 5 > 0  : track passed (value = ROI_ID); trimmed to valid start
+            %   col 5 = -1 : track rejected; original data preserved
             if isempty(obj.RawTracks)
                 error('No tracks loaded. Call readData() or fromSMD() first.');
             end
@@ -151,28 +185,49 @@ classdef TrajectoryWrapper < handle
 
             minLengthBeforeGap = obj.Parameters.minLengthBeforeGap;
 
-            % Delegate to shared utility (frame numbers are in column 3 for TW)
-            culled_tracks = TrackUtils.cullTracksCore( ...
+            [rawCulled, rawIndices, startFrames] = TrackUtils.cullTracksCore( ...
                 obj.RawTracks, obj.ROIs, 3, minLengthBeforeGap);
 
-            % Shift frame numbers from 0-based to 1-based
-            for ii = 1:length(culled_tracks)
-                culled_tracks{ii}(:,3) = culled_tracks{ii}(:,3) + 1;
+            % Build lookup: original index → (ROI_ID, start frame)
+            nRaw    = numel(obj.RawTracks);
+            roiLookup   = zeros(nRaw, 1);    % 0 = rejected
+            frameLookup = zeros(nRaw, 1);
+            for k = 1:numel(rawIndices)
+                roiLookup(rawIndices(k))   = rawCulled{k}(1, end);   % ROI_ID from last col
+                frameLookup(rawIndices(k)) = startFrames(k);
             end
 
-            obj.CulledTracks = culled_tracks;
-            obj.IsCulled     = true;
+            % Rewrite RawTracks with col 5 appended
+            newTracks = cell(nRaw, 1);
+            for ii = 1:nRaw
+                t = obj.RawTracks{ii};
+                if roiLookup(ii) > 0
+                    % Passed: trim to valid start, append ROI_ID
+                    t = sortrows(t, 3);
+                    t = t(t(:,3) >= frameLookup(ii), :);
+                    newTracks{ii} = [t, repmat(roiLookup(ii), size(t,1), 1)];
+                else
+                    % Rejected: keep full original track, append -1
+                    newTracks{ii} = [t, repmat(-1, size(t,1), 1)];
+                end
+            end
+
+            obj.RawTracks = newTracks;
+            obj.IsCulled  = true;
+
+            culled_tracks = obj.getCulledTracks();
         end
 
         %% Remove relative (drift) motion
         function remove_relative_motion(obj)
-            if isempty(obj.CulledTracks)
-                error('No tracks loaded. Cull tracks first.');
+            if ~obj.IsCulled
+                error('No culled tracks available. Call cull_tracks() first.');
             end
+            culled = obj.getCulledTracks();
             data   = {};
             tracks = {};
-            for itrack = 1:numel(obj.CulledTracks)
-                data{itrack} = obj.CulledTracks{itrack}(:, [1:2, 3, 5]);
+            for itrack = 1:numel(culled)
+                data{itrack} = culled{itrack}(:, [1:2, 3, 5]);
             end
             for iroi = 1:length(obj.ROIs)
                 k  = 0;
@@ -208,21 +263,23 @@ classdef TrajectoryWrapper < handle
             tracks = obj.RawTracks;
         end
 
-        function tracks = getRelativeTracks(obj)
-            if ~obj.IsRelative
-                warning('Relative motion not yet removed. Returning culled tracks.');
-                tracks = obj.CulledTracks;
-            else
-                tracks = obj.RelativeTracks;
-            end
-        end
-
         function tracks = getCulledTracks(obj)
+            % Returns only the tracks that passed culling (col5 > 0).
             if ~obj.IsCulled
                 warning('Tracks have not been culled yet. Returning raw tracks.');
                 tracks = obj.RawTracks;
+                return;
+            end
+            mask   = cellfun(@(t) t(1,5) > 0, obj.RawTracks);
+            tracks = obj.RawTracks(mask);
+        end
+
+        function tracks = getRelativeTracks(obj)
+            if ~obj.IsRelative
+                warning('Relative motion not yet removed. Returning culled tracks.');
+                tracks = obj.getCulledTracks();
             else
-                tracks = obj.CulledTracks;
+                tracks = obj.RelativeTracks;
             end
         end
 
@@ -231,7 +288,11 @@ classdef TrajectoryWrapper < handle
         end
 
         function n = getNumCulledTracks(obj)
-            n = length(obj.CulledTracks);
+            if ~obj.IsCulled
+                n = 0;
+                return;
+            end
+            n = sum(cellfun(@(t) t(1,5) > 0, obj.RawTracks));
         end
 
         function mask = getNucleusMask(obj)
@@ -264,11 +325,33 @@ classdef TrajectoryWrapper < handle
             obj.FrameInterval = val;
         end
 
+        %% Serialization
+        function s = saveobj(obj)
+            % Strip RawTracks and RelativeTracks from the saved representation.
+            % The live in-memory object is NOT modified — only the serialized
+            % copy written to disk loses the track data.
+            % Use tc.reloadTracks() after loading to rebuild from original CSVs.
+            s.FileName      = obj.FileName;
+            s.PixelSize     = obj.PixelSize;
+            s.FrameInterval = obj.FrameInterval;
+            s.Parameters    = obj.Parameters;
+            s.ParamsFile    = obj.ParamsFile;
+            s.SourceType    = obj.SourceType;
+            s.ROIs          = obj.ROIs;
+            s.IsCulled      = obj.IsCulled;
+            s.IsRelative    = obj.IsRelative;
+            % RawTracks and RelativeTracks deliberately omitted.
+        end
+
         %% Utility: quick stats
         function summary(obj)
             fprintf('\n=== TrajectoryWrapper Summary ===\n');
             fprintf('Source type      : %s\n', obj.SourceType);
-            fprintf('Raw tracks       : %d\n', obj.getNumRawTracks());
+            if obj.IsCulled && isempty(obj.RawTracks)
+                fprintf('Raw tracks       : (not loaded — call tc.reloadTracks())\n');
+            else
+                fprintf('Raw tracks       : %d\n', obj.getNumRawTracks());
+            end
             if obj.IsCulled
                 fprintf('Culled tracks    : %d (%.1f%%)\n', ...
                     obj.getNumCulledTracks(), ...
@@ -302,15 +385,8 @@ classdef TrajectoryWrapper < handle
         %     smd.get_roi()
         %     smd.cull_tracks()
         %
-        %   Properties set automatically from SMD:
-        %     PixelSize     = smd.pixelsize
-        %     FrameInterval = 1 / smd.frame_rate
-        %     ROIs          = smd.ROIs
-        %     IsCulled      = true
-        %     SourceType    = 'smd'
-        %
-        %   Track format is converted from SMD Nx10 (µm) to TW Nx5 (pixels)
-        %   via TrajectoryAdapter.smdTracksToPixels.
+        %   smdTracksToMicrons already produces Nx5 (x,y,frame,SNR,ROI_ID),
+        %   which matches the post-cull RawTracks format directly.
 
             p = inputParser;
             addParameter(p, 'PixelSize', smd.pixelsize);
@@ -322,26 +398,41 @@ classdef TrajectoryWrapper < handle
             tw.ROIs          = smd.ROIs;
             tw.SourceType    = 'smd';
 
-            % Convert SMD tracks (Nx10, already in µm) → TW Nx5 format
             if ~isempty(smd.tracks)
-                twFmt           = TrajectoryAdapter.smdTracksToMicrons(smd.tracks);
-                tw.RawTracks    = twFmt;
-                tw.CulledTracks = twFmt;  % SMD culling is in-place; no separate pre-cull raw
-                tw.IsCulled     = true;
+                tw.RawTracks = TrajectoryAdapter.smdTracksToMicrons(smd.tracks);
             else
-                tw.RawTracks    = {};
-                tw.CulledTracks = {};
-                tw.IsCulled     = true;
+                tw.RawTracks = {};
             end
+            tw.IsCulled = true;
 
-            % Relative tracks if available
             if ~isempty(smd.relative_tracks)
                 tw.RelativeTracks = TrajectoryAdapter.smdRelativeToTW(smd.relative_tracks);
                 tw.IsRelative     = true;
             end
 
             fprintf('fromSMD: %d culled tracks imported (PixelSize=%.4f µm/px, dt=%.4f s).\n', ...
-                length(tw.CulledTracks), tw.PixelSize, tw.FrameInterval);
+                numel(tw.RawTracks), tw.PixelSize, tw.FrameInterval);
+        end
+
+        function obj = loadobj(s)
+            % Reconstruct a TrajectoryWrapper from the struct written by saveobj.
+            % RawTracks and RelativeTracks will be empty; call tc.reloadTracks()
+            % to rebuild them from the original CSV files.
+            obj = TrajectoryWrapper();
+            if isstruct(s)
+                obj.FileName      = s.FileName;
+                obj.PixelSize     = s.PixelSize;
+                obj.FrameInterval = s.FrameInterval;
+                obj.Parameters    = s.Parameters;
+                obj.ParamsFile    = s.ParamsFile;
+                obj.SourceType    = s.SourceType;
+                obj.ROIs          = s.ROIs;
+                obj.IsCulled      = s.IsCulled;
+                obj.IsRelative    = s.IsRelative;
+            else
+                % Already a TrajectoryWrapper (no saveobj was involved)
+                obj = s;
+            end
         end
     end
 end
