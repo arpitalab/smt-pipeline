@@ -21,10 +21,10 @@
 %
 % OUTPUT
 % ------
-%   tc.getMSD() calls RL_HILO internally and produces two figures:
+%   tc.getRLDecomposition() calls RL_HILO internally and produces two figures:
 %     Fig 1: van Hove correlation G(r,τ) — data + RL fit
 %     Fig 2: P(MSD) — Richardson-Lucy deconvolved MSD distribution
-%   Results are stored in tc.MSDResults.
+%   Results are stored in tc.RLResults.
 
 %% 0.  Add pipeline to the path
 run(fullfile(fileparts(mfilename('fullpath')), '..', 'setup_path.m'));
