@@ -382,8 +382,9 @@ classdef TrajectoryWrapper < handle
         %   The SMD object must have been processed through at minimum:
         %     smd.localize()
         %     smd.track()
-        %     smd.get_roi()
         %     smd.cull_tracks()
+        %   smd.get_roi() is optional. If ROIs are absent, all tracks are
+        %   assigned a dummy ROI_ID of 1 and imported without spatial filtering.
         %
         %   smdTracksToMicrons already produces Nx5 (x,y,frame,SNR,ROI_ID),
         %   which matches the post-cull RawTracks format directly.

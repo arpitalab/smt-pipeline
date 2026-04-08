@@ -35,11 +35,17 @@ classdef TrajectoryAdapter
             twTracks = cell(size(smdTracks));
             for i = 1:length(smdTracks)
                 t = smdTracks{i};
+                if size(t, 2) >= 10
+                    roi_id = t(:, 10);
+                else
+                    % get_roi() was not called — assign dummy ROI_ID of 1
+                    roi_id = ones(size(t, 1), 1);
+                end
                 twTracks{i} = [t(:,1), ...   % x (µm)
                                 t(:,2), ...   % y (µm)
                                 t(:,5), ...   % frame
                                 t(:,6), ...   % SNR
-                                t(:,10)];     % ROI_ID
+                                roi_id];      % ROI_ID (1 if no mask)
             end
         end
 

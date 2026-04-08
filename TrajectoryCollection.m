@@ -1467,5 +1467,3 @@ function s = mergeStructs(s1, s2)
         s.(fields{i}) = s2.(fields{i});
     end
 end
-
-R
