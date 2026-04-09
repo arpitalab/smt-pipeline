@@ -29,6 +29,8 @@ classdef TrajectoryCollection < handle
         Params             = struct()
         pEMParams          = struct()
         LifetimeResults    = struct()
+        FBMResults         = struct()    % Population fBM MLE (K, alpha, sigma)
+        FBMAlphaResults    = struct()    % Per-track (K, alpha) distribution
     end
 
     properties (Access = private)
@@ -40,6 +42,8 @@ classdef TrajectoryCollection < handle
         IspEMComputed          = false
         IsBootstrapComputed    = false
         IsLifetimeComputed     = false
+        IsFBMComputed          = false
+        IsFBMAlphaComputed     = false
         pEMBootstrapInputs     = struct()  % deltaX, rawResults, trackInfo, params
     end
 
@@ -241,47 +245,132 @@ classdef TrajectoryCollection < handle
             % GETRLDECOMPOSITION  Richardson-Lucy decomposition of the MSD distribution.
             %
             %   results = tc.getRLDecomposition('LagTime', 4, 'String', 'H2B')
+            %   results = tc.getRLDecomposition('TrackType', 'relative', ...)
             %
-            %   Runs RL_HILO on culled tracks (or a condition subset) and stores
-            %   results in tc.RLResults.  Re-call with the same arguments returns
-            %   cached results; use 'ForceRecompute' to re-run.
+            %   Runs RL_HILO on the selected track population and stores results in
+            %   tc.RLResults.  Re-call with the same arguments returns cached results;
+            %   use 'ForceRecompute' to re-run (also required when switching TrackType).
             %
             %   Options:
-            %     'LagTime'        - frame lag for van Hove computation (default 4)
-            %     'String'         - label for figure titles (default 'Not specified')
-            %     'Condition'      - restrict to one condition (default: all)
-            %     'ForceRecompute' - logical; default false
+            %     'TrackType'        - 'culled' (default) | 'relative' | 'raw'
+            %                          Use 'relative' to analyse motion after cell-
+            %                          motion subtraction and compare state fractions
+            %                          and diffusion parameters with the culled result.
+            %     'LagTime'          - frame lag for van Hove computation (default 4)
+            %     'String'           - label for figure titles (default 'Not specified')
+            %     'Condition'        - restrict to one condition (default: all)
+            %     'ExposureFraction' - Te/dt for fBM model inside RL (default 1)
+            %     'MinStepVar'       - minimum mean squared step (µm²) to include a
+            %                          track; drops stuck particles before RL runs.
+            %                          Set to ~4*sigma^2 (default: 0 = no filter).
+            %     'MinTrackLength'   - minimum track length in frames (default: 7)
+            %     'MinGroupSize'     - minimum tracks per state to run fBM fit (default: 50)
+            %     'SubtrackLength'   - subtrack length for per-state fBM MLE (default: 20)
+            %     'CIMethod'         - CI method for per-state fBM MLE (default: 'none')
+            %     'ForceRecompute'   - logical; default false
 
-            if ~obj.IsRLComputed
-                p = inputParser;
-                addParameter(p, 'LagTime',        4);
-                addParameter(p, 'String',          'Not specified');
-                addParameter(p, 'Condition',       [], @(x) ischar(x)||isstring(x)||iscell(x));
-                addParameter(p, 'ForceRecompute',  false, @islogical);
-                parse(p, varargin{:});
+            p = inputParser;
+            addParameter(p, 'TrackType',        'culled',        @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
+            addParameter(p, 'LagTime',          4,               @isnumeric);
+            addParameter(p, 'String',            'Not specified', @(x) ischar(x)||isstring(x));
+            addParameter(p, 'Condition',         [],              @(x) ischar(x)||isstring(x)||iscell(x));
+            addParameter(p, 'ExposureFraction',  1,               @isnumeric);
+            addParameter(p, 'MinStepVar',        0,               @isnumeric);
+            addParameter(p, 'MinTrackLength',    7,               @isnumeric);
+            addParameter(p, 'MinGroupSize',      50,              @isnumeric);
+            addParameter(p, 'SubtrackLength',    20,              @isnumeric);
+            addParameter(p, 'CIMethod',          'none',          @ischar);
+            addParameter(p, 'ForceRecompute',    false,           @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+            trackType = lower(char(o.TrackType));
 
-                if isempty(p.Results.Condition)
-                    tracks = obj.getAllCulledTracks();
-                else
-                    tracks = obj.getTracksByCondition(p.Results.Condition);
-                end
-
-                if isempty(tracks)
-                    error('No tracks available for RL decomposition.');
-                end
-
-                X = cell(1, numel(tracks));
-                for itrack = 1:numel(tracks)
-                    X{itrack} = tracks{itrack}(:, 1:2);   % already in µm
-                end
-                tracklen = cellfun('size', tracks, 1);
-                idx      = find(tracklen > 6);
-                tmp{1}   = X(idx);
-                [M, ~, computed_quantities] = RL_HILO(tmp, p.Results.String, p.Results.LagTime);
-                obj.RLResults.M                   = M;
-                obj.RLResults.computed_quantities = computed_quantities;
-                obj.IsRLComputed = true;
+            % Cache is valid only if the same TrackType was used previously
+            cachedType = '';
+            if obj.IsRLComputed && isfield(obj.RLResults, 'track_type')
+                cachedType = obj.RLResults.track_type;
             end
+            if obj.IsRLComputed && ~o.ForceRecompute && strcmp(cachedType, trackType)
+                results = obj.RLResults;
+                return;
+            end
+            if obj.IsRLComputed && ~o.ForceRecompute && ~strcmp(cachedType, trackType)
+                warning('getRLDecomposition: cached result used TrackType=''%s'' but ''%s'' requested. Pass ''ForceRecompute'',true to rerun.', ...
+                    cachedType, trackType);
+                results = obj.RLResults;
+                return;
+            end
+
+            % Retrieve tracks for the requested type
+            dt = obj.getFrameIntervalForCondition(o.Condition);
+            switch trackType
+                case 'culled'
+                    if isempty(o.Condition)
+                        tracks = obj.getAllCulledTracks();
+                    else
+                        tracks = obj.getTracksByCondition(o.Condition);
+                    end
+                case 'relative'
+                    if isempty(o.Condition)
+                        tracks = obj.getAllRelativeTracks();
+                    else
+                        tracks = obj.getRelativeTracksByCondition(o.Condition);
+                    end
+                    if isempty(tracks)
+                        error('getRLDecomposition: no relative tracks found. Run remove_relative_motion() on your wrappers first.');
+                    end
+                case 'raw'
+                    if isempty(o.Condition)
+                        tracks = obj.getAllRawTracks();
+                    else
+                        tracks = obj.getTracksByCondition(o.Condition, 'UseRaw', true);
+                    end
+            end
+
+            if isempty(tracks)
+                error('getRLDecomposition: no tracks available.');
+            end
+
+            % Length filter
+            Lmin     = round(o.MinTrackLength);
+            tracklen = cellfun('size', tracks, 1);
+            keep     = tracklen >= Lmin;
+
+            % Stuck-particle pre-filter
+            if o.MinStepVar > 0
+                mobile = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= o.MinStepVar, tracks);
+                keep   = keep & mobile;
+                fprintf('getRLDecomposition: %d/%d tracks removed by MinStepVar filter (< %.4g µm²)\n', ...
+                    sum(~mobile & tracklen >= Lmin), sum(tracklen >= Lmin), o.MinStepVar);
+            end
+
+            % keep_idx maps position-in-filtered-array → position-in-full-array.
+            % classified_tracks indices from RL_HILO are into the filtered array,
+            % so getFBMByRLState translates them through this map.
+            keep_idx = find(keep);
+
+            X = cell(1, numel(tracks));
+            for itrack = 1:numel(tracks)
+                X{itrack} = tracks{itrack}(:, 1:2);
+            end
+            tmp{1} = X(keep);
+
+            fprintf('getRLDecomposition: %d tracks entering RL_HILO\n', numel(keep_idx));
+
+            [M, ~, computed_quantities] = RL_HILO(tmp, o.String, o.LagTime, ...
+                'dt',               dt, ...
+                'ExposureFraction', o.ExposureFraction, ...
+                'MinGroupSize',     o.MinGroupSize, ...
+                'SubtrackLength',   o.SubtrackLength, ...
+                'CIMethod',         o.CIMethod);
+
+            obj.RLResults.M                   = M;
+            obj.RLResults.computed_quantities = computed_quantities;
+            obj.RLResults.dt                  = dt;
+            obj.RLResults.frac                = o.ExposureFraction;
+            obj.RLResults.track_type          = trackType;
+            obj.RLResults.track_index_map     = keep_idx;   % filtered→full index translation
+            obj.IsRLComputed = true;
             results = obj.RLResults;
         end
 
@@ -309,17 +398,27 @@ classdef TrajectoryCollection < handle
             %     .dt             - frame interval (s)
             %     .frac           - exposure / frame_interval ratio
             %     .track_type     - which track set was used
+            %
+            %   Note: the fBM fit is performed over the first floor(MaxLag/2) lag
+            %   points only. The fit curve in plotMSD is extrapolated to the full
+            %   lag range for display.
+
+            p = inputParser;
+            addParameter(p, 'TrackType',      'culled', @(x) ischar(x)||isstring(x));
+            addParameter(p, 'MaxLag',         25,       @isnumeric);
+            addParameter(p, 'NumBootstrap',   50,       @isnumeric);
+            addParameter(p, 'ExposureTime',   NaN,      @isnumeric);
+            addParameter(p, 'Condition',      [],       @(x) ischar(x)||isstring(x)||iscell(x));
+            addParameter(p, 'ForceRecompute', false,    @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            if p.Results.ForceRecompute
+                obj.IsMSDComputed = false;
+                obj.MSDResults    = struct();
+            end
 
             if ~obj.IsMSDComputed
-                p = inputParser;
-                addParameter(p, 'TrackType',      'culled', @(x) ischar(x)||isstring(x));
-                addParameter(p, 'MaxLag',         25,       @isnumeric);
-                addParameter(p, 'NumBootstrap',   50,       @isnumeric);
-                addParameter(p, 'ExposureTime',   NaN,      @isnumeric);
-                addParameter(p, 'Condition',      [],       @(x) ischar(x)||isstring(x)||iscell(x));
-                addParameter(p, 'ForceRecompute', false,    @islogical);
-                parse(p, varargin{:});
-                o = p.Results;
 
                 % --- Get tracks -------------------------------------------
                 trackType = lower(char(o.TrackType));
@@ -437,12 +536,13 @@ classdef TrajectoryCollection < handle
                     bm = bs_sum ./ bs_n;
                     boot_means(:, isamp) = bm(1:nLags);
 
-                    bm_fit = bm(1:nLags);
+                    fitLags = 1:max(1, floor(nLags/2));
+                    bm_fit = bm(fitLags);
                     valid  = ~isnan(bm_fit) & bm_fit > 0;
                     if sum(valid) >= 3
                         try
                             fp = lsqnonlin( ...
-                                @(x) my_fun(x, lag_frames(valid), bm_fit(valid), dt, frac), ...
+                                @(x) my_fun(x, lag_frames(fitLags(valid)), bm_fit(valid), dt, frac), ...
                                 x0, lb, ub, lsqOpts);
                             boot_fits(isamp, :) = fp;
                         catch
@@ -658,6 +758,463 @@ classdef TrajectoryCollection < handle
             results = obj.pEMResults;
         end
 
+        %% Population fBM MLE  (K, alpha, sigma)
+        function results = getFBMParameters(obj, varargin)
+            % GETFBMPARAMETERS  Population MLE of fBM parameters via Toeplitz likelihood.
+            %
+            %   results = tc.getFBMParameters()
+            %   results = tc.getFBMParameters('TrackType','culled', 'CIMethod','profile', ...)
+            %
+            %   Fits a single (K, alpha, sigma) to all tracks by maximising the
+            %   exact multivariate-Gaussian log-likelihood of the displacement
+            %   time series (Backlund et al. Phys. Rev. E 2015 covariance model).
+            %   The sufficient-statistic formulation makes the per-evaluation cost
+            %   O(L^3) regardless of track count, so 100 K tracks cost no more than 1 K.
+            %
+            %   Each track longer than SubtrackLength is split into non-overlapping
+            %   segments of exactly SubtrackLength frames; the final short remainder
+            %   is kept if it is >= MinSubtrackLength, discarded otherwise.
+            %
+            %   Options (passed through to fitFBM_MLE):
+            %     'TrackType'         - 'culled' (default) | 'raw' | 'relative'
+            %                           NOTE: 'relative' removes global cell motion
+            %                           but introduces a bias if residual motion
+            %                           correlations remain; use with caution.
+            %     'Condition'         - filter by condition string
+            %     'ExposureFraction'  - Te/dt  (default: 1 = stroboscopic)
+            %     'SubtrackLength'    - frames per subtrack (default: 20)
+            %     'MinSubtrackLength' - minimum subtrack length kept (default: 10)
+            %     'CIMethod'          - 'profile'|'profile+mcmc'|'mcmc'|'hessian'|'none'
+            %                           (default: 'profile')
+            %     'ProfilePoints'     - grid points per profile (default: 60)
+            %     'MCMCSamples'       - posterior samples if using MCMC (default: 5000)
+            %     'ForceRecompute'    - rerun even if cached (default: false)
+            %
+            %   Result fields: K, Ka (=K*alpha), alpha, sigma, loglik,
+            %                  n_subtracks, n_displacements, CI (if requested).
+
+            p = inputParser;
+            addParameter(p, 'TrackType',         'culled', @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
+            addParameter(p, 'Condition',         [],       @(x) ischar(x)||isstring(x)||iscell(x)||isempty(x));
+            addParameter(p, 'ExposureFraction',  1,        @isnumeric);
+            addParameter(p, 'SubtrackLength',    20,       @isnumeric);
+            addParameter(p, 'MinSubtrackLength', 10,       @isnumeric);
+            addParameter(p, 'CIMethod',          'profile',@ischar);
+            addParameter(p, 'ProfilePoints',     60,       @isnumeric);
+            addParameter(p, 'MCMCSamples',       5000,     @isnumeric);
+            addParameter(p, 'ForceRecompute',    false,    @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            trackType = lower(char(o.TrackType));
+            isSubset  = ~isempty(o.Condition) || ~strcmp(trackType, 'culled');
+
+            if ~o.ForceRecompute && obj.IsFBMComputed && ~isSubset
+                results = obj.FBMResults;
+                return;
+            end
+
+            [tracks, dt] = obj.getTracksForFBM(trackType, o.Condition);
+
+            if isempty(tracks)
+                warning('getFBMParameters: no tracks found (TrackType=''%s'').', trackType);
+                results = struct();
+                return;
+            end
+
+            fprintf('getFBMParameters: %d %s tracks, dt=%.4f s, CIMethod=%s\n', ...
+                numel(tracks), trackType, dt, o.CIMethod);
+
+            results = fitFBM_MLE(tracks, dt, ...
+                'ExposureFraction',  o.ExposureFraction, ...
+                'SubtrackLength',    o.SubtrackLength, ...
+                'MinSubtrackLength', o.MinSubtrackLength, ...
+                'CIMethod',          o.CIMethod, ...
+                'ProfilePoints',     o.ProfilePoints, ...
+                'MCMCSamples',       o.MCMCSamples);
+            results.track_type = trackType;
+
+            fprintf('  K=%.4g µm²/s^a  alpha=%.3f  sigma=%.3f µm  loglik=%.1f  (%d subtracks)\n', ...
+                results.K, results.alpha, results.sigma, results.loglik, results.n_subtracks);
+
+            if ~isSubset
+                obj.FBMResults    = results;
+                obj.IsFBMComputed = true;
+            end
+        end
+
+        %% Per-track (K, alpha) distribution
+        function results = getFBMAlphaDistribution(obj, varargin)
+            % GETFBMALPHADISTRIBUTION  Per-track fBM parameter estimates.
+            %
+            %   results = tc.getFBMAlphaDistribution()
+            %   results = tc.getFBMAlphaDistribution('TrackType','culled', 'FixSigma',true)
+            %
+            %   Fits (K, alpha) independently to each track.  With 'FixSigma' true
+            %   (default), sigma is held fixed at the population estimate from
+            %   getFBMParameters(), reducing the per-track problem from 3D to 2D
+            %   and substantially reducing noise in the alpha estimates.
+            %
+            %   With only ~38 scalar observations per 20-frame track, per-track
+            %   alpha estimates have inherent variance (~0.2-0.4 s.d.); the
+            %   observed distribution is a convolution of the true biological
+            %   distribution with this fitting noise.
+            %
+            %   Options:
+            %     'TrackType'        - 'culled' (default) | 'raw' | 'relative'
+            %                          NOTE: 'relative' tracks have cell motion
+            %                          subtracted; the fBM covariance assumes
+            %                          stationary increments, so any residual
+            %                          correlated motion biases alpha upward.
+            %                          Use 'culled' unless you have verified the
+            %                          subtraction is clean.
+            %     'Condition'        - filter by condition
+            %     'ExposureFraction' - Te/dt (default: 1)
+            %     'FixSigma'         - fix sigma to population value (default: true)
+            %     'SigmaValue'       - override sigma (µm); bypasses auto-estimation
+            %     'MinTrackLength'     - minimum frames per track (default: 15)
+            %     'MaxSubtrackLength'  - cap the Toeplitz matrix size by splitting
+            %                            long tracks into non-overlapping subtracks
+            %                            of this length and pooling their sufficient
+            %                            statistics.  Set to the same value as
+            %                            SubtrackLength in getFBMParameters (e.g. 20)
+            %                            so per-track and population fits use the
+            %                            same lag range.  Default: 0 = full track.
+            %     'MinStepVar'         - minimum mean squared step size (µm²) to
+            %                            include a track (default: 0 = no filter).
+            %                            Use e.g. 4*sigma^2 to drop stuck particles
+            %                            before fitting; these tracks collapse alpha
+            %                            toward zero and bias DACF diagnostics.
+            %     'MinAlpha'           - post-fit minimum alpha threshold; tracks
+            %                            with fitted alpha < MinAlpha are removed
+            %                            from the returned results (default: 0 = keep
+            %                            all).  Use e.g. 0.1 to discard residual
+            %                            near-immobile particles.
+            %     'ForceRecompute'     - rerun even if cached (default: false)
+            %     'Verbose'            - print progress (default: false)
+            %
+            %   Result fields:
+            %     .alpha        Nx1 per-track anomalous exponent
+            %     .K            Nx1 per-track K (µm²/s^alpha)
+            %     .Ka           Nx1 K*alpha
+            %     .track_length Nx1 frames in each track
+            %     .sigma_fixed  scalar sigma used (NaN if fitted jointly)
+            %     .track_type   string
+            %     .n_removed    number of tracks removed by MinAlpha filter
+
+            p = inputParser;
+            addParameter(p, 'TrackType',        'culled', @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
+            addParameter(p, 'Condition',        [],    @(x) ischar(x)||isstring(x)||iscell(x)||isempty(x));
+            addParameter(p, 'ExposureFraction',  1,    @isnumeric);
+            addParameter(p, 'FixSigma',       true,    @islogical);
+            addParameter(p, 'SigmaValue',      NaN,    @isnumeric);
+            addParameter(p, 'MinTrackLength',    15,    @isnumeric);
+            addParameter(p, 'MaxSubtrackLength',  0,    @isnumeric);
+            addParameter(p, 'MinStepVar',          0,    @isnumeric);
+            addParameter(p, 'MinAlpha',            0,    @isnumeric);
+            addParameter(p, 'ForceRecompute',  false,   @islogical);
+            addParameter(p, 'Verbose',         false,   @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            trackType = lower(char(o.TrackType));
+            isSubset  = ~isempty(o.Condition) || ~strcmp(trackType, 'culled');
+
+            if ~o.ForceRecompute && obj.IsFBMAlphaComputed && ~isSubset
+                results = obj.FBMAlphaResults;
+                return;
+            end
+
+            [tracks, dt] = obj.getTracksForFBM(trackType, o.Condition);
+
+            if isempty(tracks)
+                warning('getFBMAlphaDistribution: no tracks found (TrackType=''%s'').', trackType);
+                results = struct();
+                return;
+            end
+
+            % Determine sigma to fix
+            sigma_fixed = NaN;
+            if o.FixSigma
+                if ~isnan(o.SigmaValue)
+                    sigma_fixed = o.SigmaValue;
+                elseif obj.IsFBMComputed && isfield(obj.FBMResults, 'sigma') && ...
+                        strcmp(obj.FBMResults.track_type, trackType)
+                    sigma_fixed = obj.FBMResults.sigma;
+                else
+                    fprintf('getFBMAlphaDistribution: running population MLE to get sigma...\n');
+                    pop = obj.getFBMParameters('TrackType', trackType, ...
+                        'ExposureFraction', o.ExposureFraction, 'CIMethod', 'none');
+                    sigma_fixed = pop.sigma;
+                end
+                fprintf('getFBMAlphaDistribution: sigma fixed at %.4f µm\n', sigma_fixed);
+            end
+
+            results = fitFBM_pertracks(tracks, dt, ...
+                'ExposureFraction',   o.ExposureFraction, ...
+                'MinTrackLength',     o.MinTrackLength, ...
+                'MaxSubtrackLength',  o.MaxSubtrackLength, ...
+                'MinStepVar',         o.MinStepVar, ...
+                'SigmaFixed',         sigma_fixed, ...
+                'Verbose',            o.Verbose);
+            results.track_type = trackType;
+
+            % Post-fit MinAlpha filter: remove essentially immobile tracks
+            if o.MinAlpha > 0
+                keep_a = results.alpha >= o.MinAlpha;
+                n_removed = sum(~keep_a);
+                fields = {'alpha','K','Ka','sigma','track_length','loglik','converged'};
+                for fi = 1:numel(fields)
+                    if isfield(results, fields{fi})
+                        results.(fields{fi}) = results.(fields{fi})(keep_a);
+                    end
+                end
+                results.n_tracks  = sum(keep_a);
+                results.n_removed = n_removed;
+                if n_removed > 0
+                    fprintf('getFBMAlphaDistribution: removed %d tracks with alpha < %.2f\n', ...
+                        n_removed, o.MinAlpha);
+                end
+            else
+                results.n_removed = 0;
+            end
+
+            if ~isSubset
+                obj.FBMAlphaResults    = results;
+                obj.IsFBMAlphaComputed = true;
+            end
+        end
+
+        %% Displacement autocorrelation (DACF) diagnostic
+        function [dacf, lags_out] = computeDACF(obj, varargin)
+            % COMPUTEDACF  Empirical displacement autocorrelation function.
+            %
+            %   [dacf, lags] = tc.computeDACF()
+            %   [dacf, lags] = tc.computeDACF('MaxLag', 5, 'MinStepVar', 4e-4)
+            %
+            %   Accumulates the displacement ACF across all tracks.  Near-immobile
+            %   tracks (mean squared step < MinStepVar) are excluded to prevent
+            %   division-by-near-zero biasing the mean DACF value.
+            %
+            %   Options:
+            %     'TrackType'    - 'culled' (default) | 'raw' | 'relative'
+            %     'Condition'    - filter by condition
+            %     'MaxLag'       - maximum lag in frames (default: 5)
+            %     'MinTrackLength' - minimum track length (default: 10)
+            %     'MinStepVar'   - minimum mean squared step (µm²) to include
+            %                      track; set to ~4*sigma^2 (default: 0 = no filter)
+            %
+            %   Output:
+            %     dacf     - MaxLag x 1 vector, dacf(k) = DACF at lag k
+            %     lags_out - lag indices (1:MaxLag)
+
+            p = inputParser;
+            addParameter(p, 'TrackType',    'culled', @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
+            addParameter(p, 'Condition',    [],       @(x) ischar(x)||isstring(x)||iscell(x)||isempty(x));
+            addParameter(p, 'MaxLag',       5,        @isnumeric);
+            addParameter(p, 'MinTrackLength', 10,     @isnumeric);
+            addParameter(p, 'MinStepVar',   0,        @isnumeric);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            trackType = lower(char(o.TrackType));
+            [tracks, ~] = obj.getTracksForFBM(trackType, o.Condition);
+
+            maxlag  = round(o.MaxLag);
+            Lmin    = round(o.MinTrackLength);
+            num     = zeros(maxlag, 1);
+            den     = 0;
+            n_used  = 0;
+            n_skip  = 0;
+
+            for k = 1:numel(tracks)
+                tr = tracks{k};
+                if size(tr, 1) < Lmin + maxlag
+                    continue;
+                end
+                dr2 = diff(tr(:,1)).^2 + diff(tr(:,2)).^2;  % squared step sizes
+                var0 = mean(dr2);
+
+                % Skip near-immobile tracks — their DACF is undefined/noisy
+                if o.MinStepVar > 0 && var0 < o.MinStepVar
+                    n_skip = n_skip + 1;
+                    continue;
+                end
+
+                dr = sqrt(dr2);
+                dr_norm = dr - mean(dr);   % mean-centred steps for ACF
+
+                % Accumulate lag-k correlations (normalized by lag-0 variance)
+                v0 = mean(dr_norm.^2);
+                if v0 < eps
+                    n_skip = n_skip + 1;
+                    continue;
+                end
+                for lag = 1:maxlag
+                    xc = mean(dr_norm(1:end-lag) .* dr_norm(1+lag:end));
+                    num(lag) = num(lag) + xc / v0;
+                end
+                den    = den + 1;
+                n_used = n_used + 1;
+            end
+
+            if den == 0
+                warning('computeDACF: no qualifying tracks found.');
+                dacf     = nan(maxlag, 1);
+                lags_out = (1:maxlag)';
+                return;
+            end
+
+            dacf     = num / den;
+            lags_out = (1:maxlag)';
+
+            fprintf('computeDACF: %d tracks used, %d skipped (MinStepVar filter)\n', ...
+                n_used, n_skip);
+            fprintf('  DACF(1) = %.4f  (theoretical for pure fBM: (2^alpha-2)/2)\n', dacf(1));
+        end
+
+        %% Per-RL-state fBM fitting
+        function results = getFBMByRLState(obj, varargin)
+            % GETFBMBYRLSTATE  Run fBM MLE independently on each RL-classified state.
+            %
+            %   results = tc.getFBMByRLState()
+            %   results = tc.getFBMByRLState('CIMethod','profile', 'MinAlpha',0.1)
+            %
+            %   Reads tc.RLResults.computed_quantities.classified_tracks and runs
+            %   fitFBM_MLE on the tracks belonging to each state.  getRLDecomposition()
+            %   must be called first (the RL step already runs a quick fBM fit with
+            %   CIMethod='none'; call this method for full profile/MCMC CIs or for
+            %   per-track alpha distributions per state).
+            %
+            %   Options:
+            %     'CIMethod'       - 'profile'|'profile+mcmc'|'mcmc'|'hessian'|'none'
+            %                        (default: 'profile')
+            %     'SubtrackLength' - subtrack length for population MLE (default: 20)
+            %     'MinGroupSize'   - minimum tracks per state to attempt fit (default: 50)
+            %     'MinStepVar'     - pre-filter within each state (default: 0)
+            %     'MinAlpha'       - post-fit alpha floor for per-track results (default: 0)
+            %     'PerTrack'       - also run fitFBM_pertracks per state (default: false)
+            %     'Verbose'        - print progress (default: false)
+            %
+            %   Returns a struct array results(s) with one entry per state:
+            %     .state        state index
+            %     .n_tracks     number of tracks in state
+            %     .K, .alpha, .Ka, .sigma   population MLE values
+            %     .CI           confidence intervals (from fitFBM_MLE)
+            %     .pertracks    per-track struct (if PerTrack=true)
+            %     .skipped      true if state was too small to fit
+
+            p = inputParser;
+            addParameter(p, 'CIMethod',          'profile', @ischar);
+            addParameter(p, 'SubtrackLength',    20,       @isnumeric);
+            addParameter(p, 'MinGroupSize',      50,       @isnumeric);
+            addParameter(p, 'MinStepVar',         0,       @isnumeric);
+            addParameter(p, 'MinAlpha',           0,       @isnumeric);
+            addParameter(p, 'PerTrack',         false,     @islogical);
+            addParameter(p, 'MaxSubtrackLength', 20,       @isnumeric);  % matches SubtrackLength by default
+            addParameter(p, 'Verbose',          false,     @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            if ~obj.IsRLComputed || ~isfield(obj.RLResults, 'computed_quantities')
+                error('getFBMByRLState: run tc.getRLDecomposition() first.');
+            end
+
+            cq        = obj.RLResults.computed_quantities;
+            dt        = obj.RLResults.dt;
+            frac      = obj.RLResults.frac;
+            rl_type   = obj.RLResults.track_type;
+            idx_map   = obj.RLResults.track_index_map;   % filtered→full index translation
+            n_states  = numel(cq.classified_tracks);
+
+            % Retrieve the same track population that was used for RL
+            switch rl_type
+                case 'relative'
+                    all_tracks = obj.getAllRelativeTracks();
+                case 'raw'
+                    all_tracks = obj.getAllRawTracks();
+                otherwise
+                    all_tracks = obj.getAllCulledTracks();
+            end
+
+            results = struct('state', cell(n_states,1), 'n_tracks', cell(n_states,1), ...
+                'K', cell(n_states,1), 'alpha', cell(n_states,1), ...
+                'Ka', cell(n_states,1), 'sigma', cell(n_states,1), ...
+                'CI', cell(n_states,1), 'pertracks', cell(n_states,1), ...
+                'skipped', cell(n_states,1));
+
+            for s = 1:n_states
+                % classified_tracks{s} indexes into the filtered array passed to RL_HILO.
+                % Translate through idx_map to get indices into the full track array.
+                rl_idx       = cq.classified_tracks{s};
+                idx          = idx_map(rl_idx);
+                n_s          = numel(idx);
+                results(s).state    = s;
+                results(s).n_tracks = n_s;
+                results(s).skipped  = false;
+
+                if n_s < o.MinGroupSize
+                    fprintf('getFBMByRLState: state %d — %d tracks (< %d), skipped.\n', ...
+                        s, n_s, o.MinGroupSize);
+                    results(s).skipped = true;
+                    continue;
+                end
+
+                state_tracks = all_tracks(idx);
+
+                % Optional pre-filter within this state
+                if o.MinStepVar > 0
+                    mobile = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= o.MinStepVar, state_tracks);
+                    state_tracks = state_tracks(mobile);
+                    if o.Verbose
+                        fprintf('getFBMByRLState: state %d — removed %d stuck tracks\n', s, sum(~mobile));
+                    end
+                end
+
+                fprintf('getFBMByRLState: state %d (%d tracks) — fitting population fBM MLE...\n', s, numel(state_tracks));
+                try
+                    [fp, ~, ci] = fitFBM_MLE(state_tracks, dt, ...
+                        'ExposureFraction', frac, ...
+                        'SubtrackLength',   o.SubtrackLength, ...
+                        'CIMethod',         o.CIMethod, ...
+                        'Verbose',          o.Verbose);
+                    results(s).K     = fp.K;
+                    results(s).alpha = fp.alpha;
+                    results(s).Ka    = fp.Ka;
+                    results(s).sigma = fp.sigma;
+                    results(s).CI    = ci;
+                    fprintf('  state %d: alpha=%.3f [%.3f, %.3f], K=%.4g, sigma=%.4f µm\n', ...
+                        s, fp.alpha, ci.alpha(1), ci.alpha(2), fp.K, fp.sigma);
+                catch ME
+                    warning('getFBMByRLState: fBM MLE failed for state %d: %s', s, ME.message);
+                    results(s).skipped = true;
+                end
+
+                % Optional per-track distribution within this state
+                if o.PerTrack && ~results(s).skipped
+                    pt = fitFBM_pertracks(state_tracks, dt, ...
+                        'ExposureFraction',  frac, ...
+                        'SigmaFixed',        results(s).sigma, ...
+                        'MaxSubtrackLength', o.MaxSubtrackLength, ...
+                        'MinStepVar',        o.MinStepVar, ...
+                        'Verbose',           o.Verbose);
+                    if o.MinAlpha > 0
+                        keep_a = pt.alpha >= o.MinAlpha;
+                        fields = {'alpha','K','Ka','sigma','track_length','loglik','converged'};
+                        for fi = 1:numel(fields)
+                            if isfield(pt, fields{fi})
+                                pt.(fields{fi}) = pt.(fields{fi})(keep_a);
+                            end
+                        end
+                        pt.n_tracks  = sum(keep_a);
+                        pt.n_removed = sum(~keep_a);
+                    end
+                    results(s).pertracks = pt;
+                    fprintf('  state %d per-track: median alpha=%.3f\n', s, median(pt.alpha, 'omitnan'));
+                end
+            end
+        end
+
         %% Bootstrap CI (separate from pEM)
         function ciResults = computeBootstrapCI(obj, varargin)
             % COMPUTEBOOTSTRAPCI  Compute confidence intervals on a completed pEM run.
@@ -788,10 +1345,8 @@ classdef TrajectoryCollection < handle
             fprintf('RL decomposition recomputed.\n');
         end
 
-        function obj = recomputeMSD(obj, varargin)
-            obj.IsMSDComputed = false;
-            obj.MSDResults    = struct();
-            obj.getMSD(varargin{:});
+        function results = recomputeMSD(obj, varargin)
+            results = obj.getMSD(varargin{:}, 'ForceRecompute', true);
             fprintf('MSD recomputed.\n');
         end
 
@@ -1430,10 +1985,44 @@ classdef TrajectoryCollection < handle
             obj.AllRawTracks       = {};
             obj.AllCulledTracks    = {};
             obj.AllRelativeTracks  = {};
-            obj.RLResults          = struct();
-            obj.MSDResults         = struct();
+            obj.RLResults              = struct();
+            obj.MSDResults             = struct();
             obj.pEMResults             = struct();
             obj.pEMBootstrapInputs     = struct();
+            obj.FBMResults             = struct();
+            obj.FBMAlphaResults        = struct();
+            obj.IsFBMComputed          = false;
+            obj.IsFBMAlphaComputed     = false;
+        end
+
+        function [tracks, dt] = getTracksForFBM(obj, trackType, condition)
+            % GETTRACKSFORFBM  Shared track-getter for fBM methods.
+            %   trackType : 'culled' | 'raw' | 'relative'
+            %   condition : [] for all, or condition string/cell
+            dt = obj.getFrameIntervalForCondition(condition);
+            hasCondition = ~isempty(condition);
+            switch trackType
+                case 'culled'
+                    if hasCondition
+                        tracks = obj.getTracksByCondition(condition);
+                    else
+                        tracks = obj.getAllCulledTracks();
+                    end
+                case 'raw'
+                    if hasCondition
+                        tracks = obj.getTracksByCondition(condition, 'UseRaw', true);
+                    else
+                        tracks = obj.getAllRawTracks();
+                    end
+                case 'relative'
+                    if hasCondition
+                        tracks = obj.getRelativeTracksByCondition(condition);
+                    else
+                        tracks = obj.getAllRelativeTracks();
+                    end
+                otherwise
+                    error('getTracksForFBM: unknown TrackType ''%s''.', trackType);
+            end
         end
 
         function addGlobalParameters(obj, params)

@@ -1,95 +1,148 @@
-function [M,bins,computed_quantities] = RL_HILO(tracks,title_str,lagtime)
-% Driver function for the Richardson Lucy algorithm
-% Inputs:
-%       tracks: cell array of tracks (in Kaustubh's format)
-%       title_str: string for labeling the plots (e.g. H2B)
-%       lagtime: lag to calculate RL analysis 
+function [M, bins, computed_quantities] = RL_HILO(tracks, title_str, lagtime, varargin)
+% RL_HILO  Richardson-Lucy decomposition of the MSD distribution.
 %
-% Outputs:
-%       M: vector of MSD values 
-%       bins: vector of displacement values for van Hove correlation
-%       computed_quantities: struct containing P(MSD), vHC, vector of state
-%       classification, msds of each track in each state, fits of msd/lag
-%       time to power law
+%   [M, bins, computed_quantities] = RL_HILO(tracks, title_str, lagtime)
+%   [M, bins, computed_quantities] = RL_HILO(tracks, title_str, lagtime, ...
+%                                       'dt', 0.02, 'ExposureFraction', 0.5)
 %
-% Example run
-% tracks = summary_table.X(1); % replace 1 with whatever index you wish to
-% analyse
-% title_str = extractAfter(summary_table.cell_protein{1},['D4','_']); % you
-% can change this to any substring etc. This is just used for labeling the
-% figures and nothing else.
+%   Inputs:
+%     tracks        - Cell array in Kaustubh format: tracks{1}{itrack} is Nx2 (x,y µm)
+%     title_str     - Label for figure titles
+%     lagtime       - Frame lag for van Hove / track classification
+%
+%   Name-value options:
+%     'dt'               - Frame interval in seconds (default: 0.02 s).
+%                          Used for MSD axis and fBM fitting.
+%     'ExposureFraction' - Te/dt ratio for fBM model (default: 1).
+%     'MaxLag'           - Maximum lag for MSD calculation (default: 25).
+%     'MinGroupSize'     - Minimum tracks in a state to fit fBM (default: 50).
+%     'SubtrackLength'   - Subtrack length for population fBM MLE (default: 20).
+%     'CIMethod'         - CI method for fitFBM_MLE (default: 'none').
+%
+%   Outputs:
+%     M                   - Vector of MSD values (RL deconvolution result)
+%     bins                - Displacement values for van Hove correlation
+%     computed_quantities - Struct with full results (see below)
+%
+%   computed_quantities fields:
+%     .ident             - title_str
+%     .lagtime           - lagtime used
+%     .dt                - frame interval (s)
+%     .frac              - ExposureFraction used
+%     .x                 - bins (displacements)
+%     .vanHove           - empirical van Hove correlation
+%     .P1norm            - RL-deconvolved P(MSD)
+%     .Gs                - estimated van Hove from RL fit
+%     .classified_tracks - cell array of track index vectors, one per state
+%     .msd               - MaxLag x nStates ensemble MSD matrix
+%     .msderr            - MaxLag x nStates MSD error matrix
+%     .fbm               - nStates x 1 struct array: per-state fBM MLE results
+%                          fields: .K, .alpha, .Ka, .sigma, .n_tracks, .converged
+%                          (empty if state has < MinGroupSize tracks)
 
-%title_str = extractAfter(T.cell_protein{index},[cell_string,'_']);
-%if(contains(title_str,"_12ms"))
-%    title_str = extractBefore(title_str,"_12ms");
-%end
-sprintf('computing for %s',title_str)
-%tracks=T.X(index);
-[~,vanHove,bins]=calc_vanHove(tracks,lagtime,1);
-[M,Gs,P1norm,~] = RL_psd_tmp(bins,vanHove,50000);
+p = inputParser;
+addParameter(p, 'dt',               0.02,     @isnumeric);
+addParameter(p, 'ExposureFraction', 1,        @isnumeric);
+addParameter(p, 'MaxLag',           25,       @isnumeric);
+addParameter(p, 'MinGroupSize',     50,       @isnumeric);
+addParameter(p, 'SubtrackLength',   20,       @isnumeric);
+addParameter(p, 'CIMethod',         'none',   @ischar);
+parse(p, varargin{:});
+o = p.Results;
+
+dt      = o.dt;
+frac    = o.ExposureFraction;
+max_lag = round(o.MaxLag);
+
+fprintf('RL_HILO: dt=%.4f s, ExposureFraction=%.3f\n', dt, frac);
+
+% --- Van Hove and RL deconvolution ---
+[~, vanHove, bins] = calc_vanHove(tracks, lagtime, 1);
+[M, Gs, P1norm, ~] = RL_psd_tmp(bins, vanHove, 50000);
+
 figure;
-plot(bins,vanHove,'ko','markersize',8);
+plot(bins, vanHove, 'ko', 'markersize', 8);
 hold on;
-set(gca,'yscale','log');
-plot(bins,Gs,'r','linewidth',2);
-set(gca,'linewidth',1,'fontsize',24,'fontweight','bold');
+set(gca, 'yscale', 'log');
+plot(bins, Gs, 'r', 'linewidth', 2);
+set(gca, 'linewidth', 1, 'fontsize', 24, 'fontweight', 'bold');
 xlabel('r [\mum]');
 ylabel('G(r,\tau)');
 axis([0 1 1e-4 100]);
 axis square;
 box off;
 title(title_str);
+
 figure;
-semilogx(M,P1norm,'k','linewidth',2);
+semilogx(M, P1norm, 'k', 'linewidth', 2);
 title(title_str);
 axis([1e-3 2e-1 0 200]);
 xlabel('MSD [\mum^2]');
 ylabel('P(MSD)');
-set(gca,'linewidth',1,'fontsize',24,'fontweight','bold');
+set(gca, 'linewidth', 1, 'fontsize', 24, 'fontweight', 'bold');
 box off;
-classified_tracks=classify_tracks(tracks,P1norm,M,lagtime,1,title_str); %classify tracks based on the RL P(MSD) distribution
-[~,msd,msd_err] = msd_calc(classified_tracks,tracks,25); % calculate ensemble msd for the different groups
-%
-% Fit the ensemble msd data for each group (provided there are
-% more than some number of tracks) to a power law model and return that
-lsqOpts = optimoptions('lsqnonlin', 'MaxFunctionEvaluations', 1000, 'Display', 'none');
-x1 = linspace(0.2,25*0.2,25)'; % this needs to be modified to accept the sampling time and maximum lag as input
-fits = {};
-fitci = {};
-for ii=1:size(msd,2)
-   if(length(classified_tracks{ii})>200) % if there are sufficient number of tracks
-       dat1 = msd(:,ii);
-       Fsumsquares = @(x)(log(fun_v(x)) - log(dat1));
-       [fitpars, ResNorm, Residual, Flag, Output, Lambda, Jacobian] = lsqnonlin(@(x) my_fun(x,(1:25)',dat1(:)),[1e-4,1e-4,0.5],[1e-4,1e-6,0.1],[5e-1,10e-3,1],lsqOpts);
-       %[fitpars, ResNorm, Residual, Flag, Output, Lambda, Jacobian] = lsqnonlin(Fsumsquares,[0.007,0.4,0.001],[1e-4,0.1,1e-3],[2e-1,0.7,10e-3],lsqOpts);
-       CI = nlparci(fitpars,Residual,'jacobian',Jacobian);
-       fits{ii}=fitpars;
-       fitci{ii}=CI;
-   end
+
+% --- Track classification ---
+classified_tracks = classify_tracks(tracks, P1norm, M, lagtime, 1, title_str);
+n_states = numel(classified_tracks);
+
+% --- Ensemble MSD per state ---
+[x_lag, msd, msd_err] = msd_calc(classified_tracks, tracks, max_lag);
+
+% --- Per-state fBM MLE (replaces lsqnonlin + my_fun) ---
+fbm_results(n_states) = struct('K', NaN, 'alpha', NaN, 'Ka', NaN, ...
+    'sigma', NaN, 'n_tracks', 0, 'converged', false, 'CI', struct());
+
+all_tracks_flat = tracks{1};  % unwrap Kaustubh format
+
+for s = 1:n_states
+    idx = classified_tracks{s};
+    n_s = numel(idx);
+
+    if n_s < o.MinGroupSize
+        fprintf('RL_HILO: state %d — %d tracks (< MinGroupSize=%d), skipping fBM fit.\n', ...
+            s, n_s, o.MinGroupSize);
+        fbm_results(s).n_tracks = n_s;
+        continue;
+    end
+
+    state_tracks = all_tracks_flat(idx);
+
+    fprintf('RL_HILO: fitting fBM MLE for state %d (%d tracks)...\n', s, n_s);
+    try
+        [fp, ~, ci] = fitFBM_MLE(state_tracks, dt, ...
+            'ExposureFraction', frac, ...
+            'SubtrackLength',   o.SubtrackLength, ...
+            'CIMethod',         o.CIMethod, ...
+            'Verbose',          false);
+        fbm_results(s).K         = fp.K;
+        fbm_results(s).alpha     = fp.alpha;
+        fbm_results(s).Ka        = fp.Ka;
+        fbm_results(s).sigma     = fp.sigma;
+        fbm_results(s).n_tracks  = n_s;
+        fbm_results(s).converged = true;
+        fbm_results(s).CI        = ci;
+        fprintf('  state %d: alpha=%.3f, K=%.4g µm²/s^alpha, sigma=%.4f µm\n', ...
+            s, fp.alpha, fp.K, fp.sigma);
+    catch ME
+        warning('RL_HILO: fBM fit failed for state %d: %s', s, ME.message);
+        fbm_results(s).n_tracks = n_s;
+    end
 end
 
-% Returning a structure with different fields so
-% one does not need to compute everything all over again.
-computed_quantities.ident = title_str; %identifier
-computed_quantities.lagtime = lagtime; %lagtime for computation
-computed_quantities.x = bins; %vector of displacements for vHC
-computed_quantities.vanHove = vanHove; % van Hove correlation
-computed_quantities.P1norm = P1norm; % P(M)
-computed_quantities.Gs = Gs; % estimated vHC
-computed_quantities.classified_tracks = classified_tracks; %cell array of classified tracks
-computed_quantities.msd = msd; % mean squared displacement of all tracks for all groups
-computed_quantities.msderr = msd_err; % error in msd
-computed_quantities.fits = fits; %msd fits
-computed_quantities.fitci = fitci; % confidence interval of fits
+% --- Pack output ---
+computed_quantities.ident             = title_str;
+computed_quantities.lagtime           = lagtime;
+computed_quantities.dt                = dt;
+computed_quantities.frac              = frac;
+computed_quantities.x                 = bins;
+computed_quantities.vanHove           = vanHove;
+computed_quantities.P1norm            = P1norm;
+computed_quantities.Gs                = Gs;
+computed_quantities.classified_tracks = classified_tracks;
+computed_quantities.msd               = msd;
+computed_quantities.msderr            = msd_err;
+computed_quantities.msd_lags          = x_lag;
+computed_quantities.fbm               = fbm_results;
 
 end
-
-function F = my_fun(x,lags,e_msd)
-  
-b = (abs(1+0.05./lags).^(2+x(3))+abs(1-0.05./lags).^(2+x(3))-2)./((0.05./lags).^2);
-
-  mlfit = 2*x(1)/((1+x(3))*(2+x(3)))*(0.2.^x(3)*lags.^x(3).*b-2*0.01.^x(3))+2*x(2);
-  
-  F = (log(mlfit)-log(e_msd)).^2;
-end
-
