@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lifetime &amp; DACF — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Lifetime &amp; DACF</h1>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getLifetime</h2>
+
+<p>
+Estimates the dwell-time (fluorophore lifetime) distribution by detecting
+bound particles — molecules that remain confined to a small region —
+via the <code>find_bound_particles_2</code> algorithm.
+</p>
+
+<div class="sig">results = tc.getLifetime()
+results = tc.getLifetime('rmin',0.25, 'rmax',0.4, 'minTrackLength',4, 'maxTrackLength',400)</div>
+
+<p>
+<code>recomputeLifetime</code> forces recomputation with new parameters:
+</p>
+<pre><code>tc.recomputeLifetime('rmin', 0.20, 'rmax', 0.35);</code></pre>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>rmin</code></td><td>0.25</td><td>Inner confinement radius (µm). Molecules within this radius across consecutive frames are considered bound.</td></tr>
+    <tr><td><code>rmax</code></td><td>0.4</td><td>Outer confinement radius (µm). Tracks that exit beyond <code>rmax</code> are not classified as bound.</td></tr>
+    <tr><td><code>minTrackLength</code></td><td>4</td><td>Minimum track length in frames to include in the lifetime analysis.</td></tr>
+    <tr><td><code>maxTrackLength</code></td><td>400</td><td>Maximum track length in frames (excludes very long bleaching artefacts).</td></tr>
+    <tr><td><code>UseRaw</code></td><td>false</td><td>Use raw (unculled) tracks instead of culled tracks.</td></tr>
+  </tbody>
+</table>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.x</code></td><td>Track length axis (frames).</td></tr>
+    <tr><td><code>.f</code></td><td>Empirical lifetime survival function (proportion of bound events lasting ≥ x frames).</td></tr>
+    <tr><td><code>.flo</code></td><td>Lower 95% confidence bound on f.</td></tr>
+    <tr><td><code>.fup</code></td><td>Upper 95% confidence bound on f.</td></tr>
+    <tr><td><code>.TrackLengths</code></td><td>Raw track lengths for all tracks that entered the analysis.</td></tr>
+  </tbody>
+</table>
+
+<h3>Example</h3>
+<pre><code>tc.getLifetime('rmin', 0.25, 'rmax', 0.4);
+
+x   = tc.LifetimeResults.x;
+f   = tc.LifetimeResults.f;
+flo = tc.LifetimeResults.flo;
+fup = tc.LifetimeResults.fup;
+dt  = tc.getFrameIntervalForCondition([]);
+
+figure;
+fill([x; flipud(x)] * dt, [fup; flipud(flo)], [0.7 0.9 1], ...
+     'EdgeColor','none', 'FaceAlpha', 0.5);
+hold on;
+semilogy(x * dt, f, 'b-', 'LineWidth', 2);
+set(gca, 'YScale','log', 'FontSize',16);
+xlabel('Dwell time (s)');
+ylabel('Survival probability');</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="dacf">computeDACF — Displacement Autocorrelation</h2>
+
+<p>
+The displacement autocorrelation function (DACF) is a model-free diagnostic
+for anomalous diffusion. For a pure fBM process with anomalous exponent α:
+</p>
+<pre><code>DACF(k=1) = (2^α − 2) / 2</code></pre>
+<p>
+Values near −0.5 indicate strong anti-correlation (subdiffusion, α ≈ 0.5).
+Values near 0 indicate uncorrelated steps (Brownian, α = 1).
+Positive values indicate super-diffusion. The DACF is particularly useful
+for validating fBM parameter estimates from <code>getFBMParameters</code>.
+</p>
+
+<div class="sig">[dacf, lags] = tc.computeDACF()
+[dacf, lags] = tc.computeDACF('MaxLag',5, 'MinStepVar',4e-4, 'TrackType','relative')</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>TrackType</code></td><td><code>'culled'</code></td><td><code>'culled'</code> | <code>'relative'</code> | <code>'raw'</code></td></tr>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to a condition.</td></tr>
+    <tr><td><code>MaxLag</code></td><td>5</td><td>Maximum lag in frames for the ACF.</td></tr>
+    <tr><td><code>MinTrackLength</code></td><td>10</td><td>Minimum track length (frames) to include.</td></tr>
+    <tr><td><code>MinStepVar</code></td><td>0</td><td>Minimum mean squared step (µm²). Near-immobile tracks are excluded as their DACF is undefined (division by near-zero variance). Set to ~4·σ².</td></tr>
+  </tbody>
+</table>
+
+<h3>Output</h3>
+<table>
+  <thead><tr><th>Output</th><th>Size</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>dacf</code></td><td>MaxLag × 1</td><td>Empirical DACF at lags 1 … MaxLag.</td></tr>
+    <tr><td><code>lags</code></td><td>MaxLag × 1</td><td>Lag indices.</td></tr>
+  </tbody>
+</table>
+
+<h3>Example — comparing empirical DACF to fBM prediction</h3>
+<pre><code>sigma_fixed = 0.040;   % µm
+[dacf, lags] = tc.computeDACF( ...
+    'TrackType',    'relative', ...
+    'MaxLag',        5,         ...
+    'MinStepVar',    4*sigma_fixed^2);
+
+% Get alpha from population fBM MLE
+fbm = tc.getFBMParameters('TrackType','relative', ...
+    'ExposureFraction',0.05,'SubtrackLength',40,'CIMethod','none');
+
+dacf_theory = (2.^(lags * fbm.alpha) - 2) / 2;   % approximate fBM prediction
+
+figure;
+plot(lags, dacf, 'ko-', 'LineWidth',2, 'MarkerFaceColor','k', 'DisplayName','Empirical');
+hold on;
+plot(lags, dacf_theory, 'r--', 'LineWidth',1.5, 'DisplayName',sprintf('fBM (α=%.2f)',fbm.alpha));
+xlabel('Lag (frames)');
+ylabel('DACF');
+legend('Box','off');
+title('Displacement autocorrelation');</code></pre>
+
+<div class="tip">
+  <strong>Interpreting DACF:</strong>
+  If the empirical DACF(1) matches (2^α − 2)/2 from <code>getFBMParameters</code>,
+  the fBM model is consistent with the data. A discrepancy suggests either residual
+  immobile particles (pull DACF toward 0) or residual correlated drift in relative
+  tracks (pull DACF positive).
+</div>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

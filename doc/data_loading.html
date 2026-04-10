@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Loading — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Data Loading</h1>
+
+<p>
+The pipeline has two classes responsible for loading and organising track data:
+<code>TrajectoryWrapper</code> (one per FOV) and <code>TrajectoryCollection</code>
+(aggregates all FOVs and owns all analysis methods).
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="wrapper">TrajectoryWrapper</h2>
+
+<p>
+<code>TrajectoryWrapper</code> is a handle class that owns the raw data for a single
+field of view. It handles:
+</p>
+<ul>
+  <li>Loading from CSV (Python quot tracker output) or from a processed SMD object.</li>
+  <li>Converting coordinates from pixels to µm.</li>
+  <li>Culling tracks using a nucleus/ROI mask and a gap-consistency filter.</li>
+  <li>Removing global cell motion via a maximum spanning forest.</li>
+</ul>
+
+<h3>Track storage format</h3>
+<p>After <code>cull_tracks()</code>, each track in <code>RawTracks</code> is an <strong>N×5</strong> matrix:</p>
+<table>
+  <thead><tr><th>Column</th><th>Contents</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>x (µm)</td></tr>
+    <tr><td>2</td><td>y (µm)</td></tr>
+    <tr><td>3</td><td>frame (1-based integer)</td></tr>
+    <tr><td>4</td><td>SNR (per-localization)</td></tr>
+    <tr><td>5</td><td>ROI_ID (&gt; 0 = passed culling; −1 = rejected)</td></tr>
+  </tbody>
+</table>
+<p><code>getCulledTracks()</code> returns only the entries where col 5 &gt; 0.</p>
+
+<h3>CSV workflow</h3>
+<pre><code>tw = TrajectoryWrapper('PixelSize', 0.165, 'FrameInterval', 0.02);
+tw.readData('s001_trajs.csv');      % loads, converts px→µm, 0-based→1-based frames
+tw.loadNucleusMask();               % finds matching CellPose .mat mask
+tw.cull_tracks();                   % ROI membership + gap filter
+tw.remove_relative_motion();        % maximum spanning forest subtraction
+
+tracks = tw.getCulledTracks();      % N×5 cell array, culled
+rel    = tw.getRelativeTracks();    % relative-motion-corrected tracks
+tw.summary();                       % prints track counts, pixel size, dt</code></pre>
+
+<div class="note">
+  <strong>CSV format:</strong> The reader expects columns in the order produced by the
+  quot Python tracker: x, y, frame, SNR, track_id (columns 1, 2, 16, 11, 18 of the CSV).
+  Coordinates are in pixels and are scaled by <code>PixelSize</code> on load.
+  Frames are shifted from 0-based (Python) to 1-based (MATLAB).
+</div>
+
+<h3>Reading parameters from a TOML file</h3>
+<pre><code>tw.readParams('experiment.toml');
+% Recognized keys:
+%   pixel_size     → PixelSize (µm/px)
+%   frame_interval → FrameInterval (s)
+% All other keys are stored in tw.Parameters</code></pre>
+
+<p>A minimal TOML file:</p>
+<pre><code>[acquisition]
+pixel_size     = 0.165
+frame_interval = 0.02
+
+[culling]
+minTrackLength    = 5
+minLengthBeforeGap = 3</code></pre>
+
+<h3>Culling logic</h3>
+<p>
+<code>cull_tracks()</code> calls <code>TrackUtils.cullTracksCore()</code>, which:
+</p>
+<ol>
+  <li>Tests whether each track's starting position falls inside any ROI polygon.</li>
+  <li>Applies a gap-consistency filter: keeps only frames before the first gap longer
+      than <code>minLengthBeforeGap</code> frames.</li>
+  <li>Trims each passing track to its valid start frame.</li>
+</ol>
+<p>
+Tracks that fail are kept in <code>RawTracks</code> with col 5 = −1 (so the full
+track list is preserved for auditing); <code>getCulledTracks()</code> filters them out.
+</p>
+
+<h3>Relative motion removal</h3>
+<p>
+<code>remove_relative_motion()</code> corrects for global nuclear drift within each ROI:
+</p>
+<ol>
+  <li>Groups culled tracks by ROI_ID.</li>
+  <li>Builds a maximum spanning forest connecting co-temporal tracks (requires ≥ 10 tracks per ROI).</li>
+  <li>Computes pairwise relative displacements along forest edges to estimate the global
+      drift at each frame.</li>
+  <li>Subtracts the estimated drift from every track; result stored in <code>RelativeTracks</code>.</li>
+</ol>
+<p>Results are available via <code>tw.getRelativeTracks()</code>.</p>
+
+<h3>SMD workflow</h3>
+<pre><code>% The SMD object must already be processed:
+smd.localize();
+smd.track();
+smd.get_roi();    % optional — if absent, all tracks get ROI_ID = 1
+smd.cull_tracks();
+
+tw = TrajectoryWrapper.fromSMD(smd);
+% Imports tracks already in µm (smdTracksToMicrons), sets FrameInterval
+% from smd.frame_rate, copies ROIs and relative tracks if present.</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="collection">TrajectoryCollection</h2>
+
+<p>
+<code>TrajectoryCollection</code> aggregates any number of <code>TrajectoryWrapper</code>
+instances and owns all analysis methods (MSD, fBM, RL, pEM, Lifetime).
+It maintains a <code>Metadata</code> table (FileID, FilePath, Condition) and lazy-collected
+track arrays per type.
+</p>
+
+<h3>addFromFile</h3>
+<pre><code>tc.addFromFile(csvFile)
+tc.addFromFile(csvFile, 'FileID','1', 'Condition','Control', ...
+               'PixelSize',0.165, 'FrameInterval',0.02)
+tc.addFromFile(csvFile, 'ParamsFile','experiment.toml', 'Condition','Treated')</code></pre>
+<p>
+Internally creates a <code>TrajectoryWrapper</code>, runs <code>readData</code>,
+<code>loadNucleusMask</code>, <code>cull_tracks</code>, and <code>remove_relative_motion</code>,
+then registers it in the collection. Direct <code>PixelSize</code>/<code>FrameInterval</code>
+arguments override TOML values.
+</p>
+
+<h3>addFromSMD</h3>
+<pre><code>tc.addFromSMD(smd)
+tc.addFromSMD(smd, 'FileID','run2', 'Condition','Treated')</code></pre>
+<p>
+Creates a <code>TrajectoryWrapper</code> via <code>TrajectoryWrapper.fromSMD(smd)</code>
+and registers it. No pipeline steps are re-run; the SMD must be fully processed.
+</p>
+
+<h3>ReadParams — propagate TOML to all wrappers</h3>
+<pre><code>tc.ReadParams('experiment.toml')
+% Sets PixelSize on CSV-sourced wrappers and FrameInterval on any
+% wrapper where it is still NaN. Stores all keys in tc.Params.</code></pre>
+
+<h3>setFrameIntervalAll</h3>
+<pre><code>tc.setFrameIntervalAll(0.02)   % override FrameInterval on every wrapper</code></pre>
+
+<h3>Batch loading</h3>
+<pre><code>files = dir('data/*.csv');
+for k = 1:numel(files)
+    tc.addFromFile(fullfile(files(k).folder, files(k).name), ...
+                   'FileID',    num2str(k), ...
+                   'Condition', 'Control');
+end
+tc.summary();</code></pre>
+
+<h3>Querying</h3>
+<pre><code>% By condition
+tracks = tc.getTracksByCondition('Control');
+rel    = tc.getRelativeTracksByCondition('Control');
+
+% All tracks (lazy-collected across all wrappers)
+all_culled   = tc.getAllCulledTracks();
+all_relative = tc.getAllRelativeTracks();
+
+% Track length distribution (culled)
+tl = tc.getTrackLengthDistribution();
+histogram(tl, 50);
+
+% Visualization: plot tracks per wrapper
+tc.visualizeSubsets('Condition','Control','NumTracks',200);</code></pre>
+
+<h3>Conditions</h3>
+<p>
+Any string can be used as a <code>Condition</code> tag. All analysis methods accept
+a <code>'Condition'</code> argument to restrict the track population. When
+<code>Condition</code> is set, results are not cached on the object (they are returned
+but not stored as the primary cached result).
+</p>
+
+<pre><code>% Set condition after loading
+tc.setCondition('3', 'Treated');   % change condition for FileID '3'</code></pre>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

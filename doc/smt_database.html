@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMTDatabase — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>SMTDatabase</h1>
+
+<p>
+<code>SMTDatabase</code> is a SQLite-backed registry for SMT experiments.
+It tracks which <code>TrajectoryCollection</code> objects exist, which analyses
+have been run, and key numerical summaries — without duplicating the full data
+(which stays in <code>.mat</code> files on disk).
+</p>
+<p>Requires MATLAB R2022b+ (uses the built-in <code>sqlite</code> function; no Database Toolbox needed).</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Data hierarchy</h2>
+
+<pre><code>Collection  – one per molecule / treatment / substrate / imaging rate.
+              Spans ALL dates and FOVs for that condition group.
+              Example: "H2B_E2_1kPa_slow"
+
+Experiment  – one per FOV (TrajectoryWrapper).
+              Date auto-extracted from the file path.
+              Many experiments → one collection.
+
+Analysis run – one per completed analysis (pEM, MSD, Lifetime, fBM).
+               Stores key numerical summaries as JSON; full results
+               live in the .mat pointed to by the collection.</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Constructor</h2>
+
+<pre><code>db = SMTDatabase('smt_pipeline.db')   % opens or creates the .db file</code></pre>
+
+<p>Close the connection explicitly when done:</p>
+<pre><code>db.close()   % or just clear db (destructor closes it)</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>registerCollection</h2>
+
+<p>
+Registers a <code>TrajectoryCollection</code> and all its FOVs in the database.
+Physical metadata (molecule, substrate, imaging rate, exposure time) is
+auto-parsed from file paths using the HILO directory convention:
+</p>
+<pre><code>HILO/{molecule}/{e-i}/{substrate}/{YYYYMMDD}/quot_input_links/*.csv</code></pre>
+
+<div class="sig">collId = db.registerCollection(tc, 'Name','H2B_E2_1kPa_slow', 'Treatment','E2')
+
+% Preview path parsing before registering:
+SMTDatabase.parsePathMetadata('/path/to/file_trajs.csv')</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Required?</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>Name</code></td><td>Yes</td><td>Unique collection name, e.g. <code>'H2B_E2_1kPa_slow'</code>.</td></tr>
+    <tr><td><code>Treatment</code></td><td>Yes</td><td>Treatment label (cannot be inferred from path).</td></tr>
+    <tr><td><code>Molecule</code></td><td>auto</td><td>Auto-parsed from path; override if needed.</td></tr>
+    <tr><td><code>Substrate</code></td><td>auto</td><td>Auto-parsed from path.</td></tr>
+    <tr><td><code>ImagingHz</code></td><td>auto</td><td>Auto-parsed from filename (<code>i200ms</code> → 5 Hz).</td></tr>
+    <tr><td><code>ExposureTime</code></td><td>auto</td><td>Auto-parsed from filename (<code>e10ms</code> → 0.01 s).</td></tr>
+    <tr><td><code>MatPath</code></td><td>No</td><td>Path to the .mat file with full results (set after saving).</td></tr>
+    <tr><td><code>TomlFile</code></td><td>No</td><td>Path to experiment TOML file.</td></tr>
+    <tr><td><code>Notes</code></td><td>No</td><td>Free-text notes.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Duplicate names:</strong> Registration fails if the collection name
+  already exists. Use <code>updateCollection</code> to change metadata on an
+  existing entry.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>updateCollection</h2>
+
+<pre><code>db.updateCollection('H2B_E2_1kPa_slow', ...
+    'MatPath',      'results/H2B_E2_1kPa_slow.mat', ...
+    'ExposureTime', 0.01, ...
+    'Notes',        're-analyzed with SubtrackLength=40')</code></pre>
+
+<p>Updatable fields: <code>MatPath</code>, <code>Notes</code>, <code>Molecule</code>, <code>Treatment</code>, <code>Substrate</code>, <code>ImagingHz</code>, <code>ExposureTime</code>, <code>TomlFile</code>.</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>logAnalysis</h2>
+
+<p>Records a completed analysis run with key numerical summaries.</p>
+
+<pre><code>db.logAnalysis('H2B_E2_1kPa_slow', tc, 'pEM')
+db.logAnalysis('H2B_E2_1kPa_slow', tc, 'MSD')
+db.logAnalysis('H2B_E2_1kPa_slow', tc, 'Lifetime')
+db.logAnalysis('H2B_E2_1kPa_slow', tc, 'pEM', ...
+    'ConditionFilter', 'E2_treated', ...
+    'Notes',           'K=3, bootstrap 500 resamples')</code></pre>
+
+<p>
+The <code>mat_path</code> stored on the collection is automatically referenced.
+Summaries (optimal K, state D values, proportions) are stored as JSON in the
+<code>analysis_runs</code> table.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Browsing and querying</h2>
+
+<pre><code>% List all collections
+db.listCollections()
+
+% Filter by fields
+db.listCollections('Molecule','H2B', 'Substrate','1kPa')
+
+% List analysis runs
+db.listAnalyses('AnalysisType','pEM')
+
+% Get full info for one collection
+info = db.getCollection('H2B_E2_1kPa_slow');
+% info.collection  – metadata row
+% info.experiments – FOV table with exp_date per FOV
+% info.analyses    – analysis run history
+% info.pEM         – decoded state summaries (if pEM was logged)
+
+% Load a TrajectoryCollection from its registered .mat
+tc = db.loadCollection('H2B_E2_1kPa_slow');
+
+% Raw SQL query
+T = db.query('SELECT * FROM analysis_runs WHERE optimal_k = 3')</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Typical end-to-end workflow</h2>
+
+<pre><code>% 1. Create database
+db = SMTDatabase('smt_pipeline.db');
+
+% 2. Load and analyse
+tc = TrajectoryCollection();
+tc.ReadParams('experiment.toml');
+files = dir('data/HILO/H2B/e10ms_i200ms/1kPa/20240315/**/*.csv');
+for k = 1:numel(files)
+    tc.addFromFile(fullfile(files(k).folder, files(k).name), ...
+        'FileID', num2str(k), 'Condition', 'E2');
+end
+tc.getBayesianDiffusivity();
+tc.computeBootstrapCI('nBoot', 200);
+tc.getFBMParameters('TrackType','relative','ExposureFraction',0.05, ...
+    'SubtrackLength',40,'CIMethod','profile');
+
+% 3. Register and log
+db.registerCollection(tc, 'Name','H2B_E2_1kPa_slow', 'Treatment','E2');
+
+save('results/H2B_E2_1kPa_slow.mat', 'tc');
+db.updateCollection('H2B_E2_1kPa_slow', 'MatPath','results/H2B_E2_1kPa_slow.mat');
+db.logAnalysis('H2B_E2_1kPa_slow', tc, 'pEM');
+
+% 4. Browse later
+db.listCollections();
+info = db.getCollection('H2B_E2_1kPa_slow');
+disp(info.pEM);   % state fractions and D values</code></pre>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

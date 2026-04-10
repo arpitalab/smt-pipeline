@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RL Analysis — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Richardson-Lucy (RL) Analysis</h1>
+
+<p>
+The RL analysis deconvolves the distribution of single-molecule MSDs to reveal
+the underlying population of diffusive states. The pipeline wraps
+<code>RL_HILO</code>, which computes the van Hove correlation function and applies
+Richardson-Lucy deconvolution to recover the MSD probability density P(MSD).
+Tracks are then classified into states and optionally fit with per-state fBM MLEs.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getRLDecomposition</h2>
+
+<div class="sig">results = tc.getRLDecomposition('TrackType','relative', 'LagTime',4, 'String','H2B')
+results = tc.getRLDecomposition(opts_struct)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>TrackType</code></td><td><code>'culled'</code></td><td><code>'culled'</code> | <code>'relative'</code> | <code>'raw'</code></td></tr>
+    <tr><td><code>LagTime</code></td><td>4</td><td>Frame lag used to compute the van Hove correlation G(r, τ). Typical values: 4–8.</td></tr>
+    <tr><td><code>String</code></td><td><code>'Not specified'</code></td><td>Label used in figure titles produced by RL_HILO.</td></tr>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to a condition string.</td></tr>
+    <tr><td><code>ExposureFraction</code></td><td>1</td><td>Te/dt passed to RL_HILO's internal fBM model. Default 1 (stroboscopic).</td></tr>
+    <tr><td><code>MinStepVar</code></td><td>0</td><td>Pre-filter: exclude tracks with mean squared step &lt; this value (µm²). Use ~4·σ² to drop immobile particles before RL runs.</td></tr>
+    <tr><td><code>MinTrackLength</code></td><td>7</td><td>Minimum track length in frames (tracks shorter than this are dropped).</td></tr>
+    <tr><td><code>MinGroupSize</code></td><td>50</td><td>Minimum tracks per state for the internal RL fBM fit to be attempted.</td></tr>
+    <tr><td><code>SubtrackLength</code></td><td>20</td><td>Subtrack length for the per-state fBM MLE run inside RL_HILO.</td></tr>
+    <tr><td><code>CIMethod</code></td><td><code>'none'</code></td><td>CI method for the internal RL fBM fits. For full CIs use <code>getFBMByRLState</code> after this call.</td></tr>
+    <tr><td><code>ForceRecompute</code></td><td>false</td><td>Rerun even if cached. Required when switching TrackType.</td></tr>
+  </tbody>
+</table>
+
+<h3>What RL_HILO does</h3>
+<ol>
+  <li>Computes the van Hove displacement distribution G(r, τ) at lag <code>LagTime</code>.</li>
+  <li>Deconvolves with Richardson-Lucy to recover P(MSD) — the distribution of single-molecule MSDs.</li>
+  <li>Identifies peaks in P(MSD) corresponding to discrete diffusive states.</li>
+  <li>Classifies each track into one state based on its MSD at the selected lag.</li>
+  <li>Runs a quick per-state fBM MLE (with <code>CIMethod='none'</code> by default).</li>
+</ol>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.M</code></td><td>MSD axis of the P(MSD) distribution.</td></tr>
+    <tr><td><code>.computed_quantities</code></td><td>Struct from RL_HILO: contains <code>.classified_tracks</code> (cell array, one per state), <code>.msd</code>, <code>.msderr</code>, <code>.vanHove</code>, <code>.Gs</code>, <code>.P1norm</code>, <code>.x</code>, <code>.ident</code>.</td></tr>
+    <tr><td><code>.dt</code></td><td>Frame interval (s).</td></tr>
+    <tr><td><code>.frac</code></td><td>ExposureFraction used.</td></tr>
+    <tr><td><code>.track_type</code></td><td>Which track set was used.</td></tr>
+    <tr><td><code>.track_index_map</code></td><td>Maps filtered-array indices → full track array indices (needed by <code>getFBMByRLState</code>).</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Caching:</strong> Results are cached on the object. Re-calling with the same
+  <code>TrackType</code> returns the cached result. Switching <code>TrackType</code>
+  without <code>ForceRecompute=true</code> produces a warning.
+</div>
+
+<h3>Example</h3>
+<pre><code>sigma_fixed = 0.040;   % µm
+
+rl = tc.getRLDecomposition( ...
+    'TrackType',      'relative', ...
+    'LagTime',         4,         ...
+    'String',         'H2B',      ...
+    'MinStepVar',      4*sigma_fixed^2, ...
+    'MinTrackLength',  20,        ...
+    'ExposureFraction', 0.05,     ...
+    'SubtrackLength',  20);
+
+fprintf('Number of RL states: %d\n', numel(rl.computed_quantities.classified_tracks));
+for s = 1:numel(rl.computed_quantities.classified_tracks)
+    n = numel(rl.computed_quantities.classified_tracks{s});
+    fprintf('  State %d: %d tracks\n', s, n);
+end</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="fbm-by-state">getFBMByRLState</h2>
+
+<p>
+Runs the population Toeplitz MLE (<code>fitFBM_MLE</code>) independently on each
+RL-classified state. The internal RL fBM fits use <code>CIMethod='none'</code>;
+call this method for full profile or MCMC confidence intervals.
+Must be called after <code>getRLDecomposition()</code>.
+</p>
+
+<div class="sig">results = tc.getFBMByRLState()
+results = tc.getFBMByRLState('CIMethod','profile', 'MinGroupSize',50, 'PerTrack',true)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>CIMethod</code></td><td><code>'profile'</code></td><td><code>'profile'</code> | <code>'profile+mcmc'</code> | <code>'mcmc'</code> | <code>'hessian'</code> | <code>'none'</code></td></tr>
+    <tr><td><code>SubtrackLength</code></td><td>20</td><td>Subtrack length for population MLE per state.</td></tr>
+    <tr><td><code>MinGroupSize</code></td><td>50</td><td>States with fewer tracks are skipped.</td></tr>
+    <tr><td><code>MinStepVar</code></td><td>0</td><td>Pre-filter within each state (µm²).</td></tr>
+    <tr><td><code>MinAlpha</code></td><td>0</td><td>Post-fit alpha floor for per-track results (when <code>PerTrack=true</code>).</td></tr>
+    <tr><td><code>PerTrack</code></td><td>false</td><td>Also run <code>fitFBM_pertracks</code> per state for per-track α distributions.</td></tr>
+    <tr><td><code>MaxSubtrackLength</code></td><td>20</td><td>Subtrack cap for per-track fits (same as <code>SubtrackLength</code> by default).</td></tr>
+    <tr><td><code>Verbose</code></td><td>false</td><td>Print per-state fitting progress.</td></tr>
+  </tbody>
+</table>
+
+<h3>Returns</h3>
+<p>A struct array <code>results(s)</code> with one entry per state:</p>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.state</code></td><td>State index.</td></tr>
+    <tr><td><code>.n_tracks</code></td><td>Number of tracks in this state.</td></tr>
+    <tr><td><code>.K, .alpha, .Ka, .sigma</code></td><td>Population MLE estimates.</td></tr>
+    <tr><td><code>.CI</code></td><td>Confidence interval struct (from <code>fitFBM_MLE</code>).</td></tr>
+    <tr><td><code>.pertracks</code></td><td>Per-track result struct (if <code>PerTrack=true</code>).</td></tr>
+    <tr><td><code>.skipped</code></td><td>true if state was too small or fitting failed.</td></tr>
+  </tbody>
+</table>
+
+<h3>Example</h3>
+<pre><code>% Run RL first (see above)
+fbm_states = tc.getFBMByRLState( ...
+    'CIMethod',      'profile', ...
+    'SubtrackLength', 40,       ...
+    'MinGroupSize',   50,       ...
+    'PerTrack',       true);
+
+for s = 1:numel(fbm_states)
+    if ~fbm_states(s).skipped
+        fprintf('State %d: alpha=%.3f [%.3f, %.3f]  K=%.4g\n', ...
+            s, fbm_states(s).alpha, ...
+            fbm_states(s).CI.alpha(1), fbm_states(s).CI.alpha(2), ...
+            fbm_states(s).K);
+    end
+end</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="plot">plotRLDecomposition</h2>
+
+<p>
+Reproduces the standard three-panel RL analysis output from stored results
+without re-running RL_HILO.
+</p>
+
+<div class="sig">figs = tc.plotRLDecomposition()
+figs = tc.plotRLDecomposition('Title','H2B Control')</div>
+
+<p>Produces three figures:</p>
+<table>
+  <thead><tr><th>Figure</th><th>Contents</th></tr></thead>
+  <tbody>
+    <tr><td>Fig 1</td><td>van Hove correlation G(r, τ): data (circles) + RL fit (line). Log-linear scale.</td></tr>
+    <tr><td>Fig 2</td><td>P(MSD): Richardson-Lucy deconvolved MSD distribution. Semi-log scale.</td></tr>
+    <tr><td>Fig 3</td><td>Per-state ensemble MSD with 99% CI error bars, log-log scale. Each state colored separately.</td></tr>
+  </tbody>
+</table>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

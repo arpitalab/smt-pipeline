@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MSD Analysis — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>MSD Analysis</h1>
+
+<p>
+<code>getMSD</code> computes the ensemble time-averaged MSD across all tracks,
+then fits a fractional Brownian motion model to the result using bootstrap
+resampling to quantify uncertainty.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getMSD / recomputeMSD</h2>
+
+<div class="sig">results = tc.getMSD('TrackType','relative', 'MaxLag',40, 'ExposureTime',0.01, ...
+                  'MinLength',40, 'MinMeanSqStep',4*sigma_fixed^2, ...
+                  'NumBootstrap',100, 'Condition','Control')
+
+results = tc.recomputeMSD(...)    % same args; forces recomputation</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>TrackType</code></td><td><code>'culled'</code></td><td><code>'culled'</code> | <code>'relative'</code> | <code>'raw'</code></td></tr>
+    <tr><td><code>MaxLag</code></td><td>25</td><td>Maximum lag in frames.</td></tr>
+    <tr><td><code>NumBootstrap</code></td><td>50</td><td>Number of bootstrap resamples for CI and fit distribution.</td></tr>
+    <tr><td><code>ExposureTime</code></td><td>NaN</td><td>Camera exposure duration (s). Used to compute frac = Te/dt for the fBM fit. If NaN, reads <code>Params.exposure_time_s</code> from TOML; if still unset, assumes stroboscopic (frac = 1) with a warning.</td></tr>
+    <tr><td><code>MinLength</code></td><td>1</td><td>Minimum track length in frames. See <a href="track_filtering.html">Filtering</a>.</td></tr>
+    <tr><td><code>MinMeanSqStep</code></td><td>0</td><td>Immobility threshold (µm²). See <a href="track_filtering.html">Filtering</a>.</td></tr>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to a condition string.</td></tr>
+    <tr><td><code>ForceRecompute</code></td><td>false</td><td>Discard cached result and recompute.</td></tr>
+  </tbody>
+</table>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Size</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.ensemble_mean</code></td><td>MaxLag × 1</td><td>Ensemble-averaged MSD (µm²) at each lag.</td></tr>
+    <tr><td><code>.lag_axis</code></td><td>MaxLag × 1</td><td>Lag times in seconds.</td></tr>
+    <tr><td><code>.lag_frames</code></td><td>MaxLag × 1</td><td>Lag indices (1 … MaxLag).</td></tr>
+    <tr><td><code>.boot_means</code></td><td>MaxLag × NumBootstrap</td><td>Bootstrap ensemble means; used for CI shading in <code>plotMSD</code>.</td></tr>
+    <tr><td><code>.boot_fits</code></td><td>NumBootstrap × 3</td><td>Bootstrap fit parameters [G, σ², α] from the least-squares fBM model.</td></tr>
+    <tr><td><code>.dt</code></td><td>scalar</td><td>Frame interval (s).</td></tr>
+    <tr><td><code>.frac</code></td><td>scalar</td><td>Exposure fraction Te/dt used in the fBM fit.</td></tr>
+    <tr><td><code>.n_tracks</code></td><td>scalar</td><td>Number of tracks after all filters.</td></tr>
+    <tr><td><code>.track_type</code></td><td>string</td><td>Which track set was used.</td></tr>
+    <tr><td><code>.min_length</code></td><td>scalar</td><td>MinLength filter that was applied.</td></tr>
+  </tbody>
+</table>
+
+<h3>How MSD is computed</h3>
+<p>
+For each track, gaps are filled with NaN, then <code>simple_msd()</code> computes
+the time-averaged MSD over all overlapping pairs. The ensemble mean is a
+weighted average (weighted by number of valid observations at each lag).
+</p>
+
+<h3>How the fBM fit works</h3>
+<p>
+Each bootstrap replicate fits the model:
+</p>
+<pre><code>MSD(n·dt) = 4·G·ψ(n, frac, α) + 4·σ²</code></pre>
+<p>
+where ψ is the Backlund exposure-time kernel and the fit uses
+<code>lsqnonlin</code> over the first <code>floor(MaxLag/2)</code> lags.
+Parameters: G (generalized diffusion, µm²/s^α), σ² (localization noise, µm²), α (anomalous exponent).
+Bounds: G ∈ [1e-5, 5], σ² ∈ [1e-6, 4e-3], α ∈ [0.1, 1.5].
+</p>
+
+<div class="note">
+  <strong>MSD fit vs Toeplitz MLE:</strong>
+  The MSD least-squares fit uses only the marginal variance at each lag (the
+  diagonal of the covariance matrix). The Toeplitz MLE (<code>getFBMParameters</code>)
+  uses the full covariance structure including anti-correlations between consecutive
+  steps. The MLE estimate of α is generally more accurate for short tracks.
+  Use <code>plotFBMFit</code> to compare both on the same axes.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>plotMSD</h2>
+
+<div class="sig">figs = tc.plotMSD()
+figs = tc.plotMSD('Color',[0 0.4 0.8], 'Title','H2B Control', 'ShowBootstraps',false)</div>
+
+<p>Requires <code>getMSD()</code> to have been run. Produces a log-log figure with:</p>
+<ul>
+  <li><strong>Shaded band</strong>: 2.5–97.5th percentile of bootstrap means (95% CI on the mean MSD).</li>
+  <li><strong>Solid line</strong>: empirical ensemble mean.</li>
+  <li><strong>Dashed line</strong>: median bootstrap fBM fit curve, with α and its 95% CI in the legend.</li>
+  <li><em>Optional</em>: individual bootstrap fit curves when <code>'ShowBootstraps',true</code>.</li>
+</ul>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>Color</code></td><td>[0 0.4 0.8]</td><td>RGB color for all MSD elements.</td></tr>
+    <tr><td><code>Title</code></td><td>auto</td><td>Figure title. If empty: "Ensemble MSD (n=N tracks)".</td></tr>
+    <tr><td><code>ShowBootstraps</code></td><td>false</td><td>Overlay individual bootstrap fit curves (semi-transparent).</td></tr>
+  </tbody>
+</table>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Typical workflow</h2>
+
+<pre><code>sigma_fixed = 0.040;   % µm — measured from fixed beads
+
+msd_opts = struct( ...
+    'TrackType',     'relative',      ...
+    'MinLength',      40,             ...
+    'MinMeanSqStep',  4*sigma_fixed^2,...
+    'MaxLag',         40,            ...
+    'NumBootstrap',   100,           ...
+    'ExposureTime',   0.01);
+
+msd = tc.recomputeMSD(msd_opts);
+
+tc.plotMSD('Title','H2B Control');
+
+fprintf('Median alpha = %.3f\n', median(msd.boot_fits(~any(isnan(msd.boot_fits),2), 3)));</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Matching MSD and fBM populations</h2>
+
+<p>
+If you plan to overlay the Toeplitz MLE curve via <code>plotFBMFit</code>, set
+<code>MinLength</code> in <code>getMSD</code> to match <code>SubtrackLength</code>
+in <code>getFBMParameters</code>. Short tracks contribute to the MSD but are
+excluded from the MLE (they don't form complete subtracks), producing a vertical
+offset between the two curves. See <a href="track_filtering.html">Filtering</a>
+for details.
+</p>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

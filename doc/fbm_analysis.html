@@ -10,9 +10,15 @@
 
 <nav>
   <a class="home" href="index.html">smt-pipeline</a>
-  <a href="fbm_analysis.html">fBM Analysis</a>
-  <a href="track_filtering.html">Track Filtering</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
   <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
 </nav>
 
 <div class="page-wrap">
@@ -282,6 +288,78 @@ structure, but require longer tracks and increase compute time.
   covariance matrix size and avoids any averaging artefacts from mixing subtrack
   lengths.
 </div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="alpha-dist">getFBMAlphaDistribution</h2>
+
+<p>
+Fits (K, α) independently to each track to obtain the full per-track distribution
+of anomalous exponents. Useful for characterising heterogeneity in the sample and
+comparing state fractions to RL or pEM classifications.
+</p>
+
+<div class="sig">results = tc.getFBMAlphaDistribution()
+results = tc.getFBMAlphaDistribution('TrackType','relative', 'FixSigma',true, ...
+                                      'MinTrackLength',20, 'MinStepVar',4*sigma^2)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>TrackType</code></td><td><code>'culled'</code></td><td><code>'culled'</code> | <code>'relative'</code> | <code>'raw'</code></td></tr>
+    <tr><td><code>FixSigma</code></td><td>true</td><td>Fix σ to the population MLE value (from <code>getFBMParameters</code>), reducing per-track fitting from 3D to 2D and substantially reducing noise in α estimates.</td></tr>
+    <tr><td><code>SigmaValue</code></td><td>NaN</td><td>Override σ (µm) directly instead of using the auto-estimated population value.</td></tr>
+    <tr><td><code>ExposureFraction</code></td><td>1</td><td>Te/dt. Should match the value used in <code>getFBMParameters</code>.</td></tr>
+    <tr><td><code>MinTrackLength</code></td><td>15</td><td>Minimum frames per track to include.</td></tr>
+    <tr><td><code>MaxSubtrackLength</code></td><td>0</td><td>Cap subtrack length for per-track fits. Set to match <code>SubtrackLength</code> from <code>getFBMParameters</code> (e.g. 40) for consistency. Default 0 = use full track.</td></tr>
+    <tr><td><code>MinStepVar</code></td><td>0</td><td>Pre-filter: drop tracks with mean squared step &lt; threshold (µm²). Use 4·σ² to exclude stuck particles.</td></tr>
+    <tr><td><code>MinAlpha</code></td><td>0</td><td>Post-fit floor: tracks with fitted α &lt; MinAlpha are removed from results.</td></tr>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to a condition string.</td></tr>
+    <tr><td><code>ForceRecompute</code></td><td>false</td><td>Rerun even if cached.</td></tr>
+    <tr><td><code>Verbose</code></td><td>false</td><td>Print per-track fitting progress.</td></tr>
+  </tbody>
+</table>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.alpha</code></td><td>N×1 per-track anomalous exponent.</td></tr>
+    <tr><td><code>.K</code></td><td>N×1 per-track K (µm²/s<sup>α</sup>).</td></tr>
+    <tr><td><code>.Ka</code></td><td>N×1 per-track K·α.</td></tr>
+    <tr><td><code>.track_length</code></td><td>N×1 length (frames) of each track.</td></tr>
+    <tr><td><code>.sigma_fixed</code></td><td>Scalar σ used (NaN if fitted jointly).</td></tr>
+    <tr><td><code>.n_tracks</code></td><td>Number of tracks after all filters.</td></tr>
+    <tr><td><code>.n_removed</code></td><td>Tracks removed by the MinAlpha post-filter.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Interpretation caveat:</strong> With ~38 scalar observations per 20-frame
+  track, per-track α estimates have intrinsic variance of ~0.2–0.4 s.d. The
+  observed distribution of α is a convolution of the true biological distribution
+  with this fitting noise. Do not over-interpret narrow features in the α histogram.
+</div>
+
+<h3>Example</h3>
+<pre><code>% Run population MLE first to get sigma
+fbm = tc.getFBMParameters('TrackType','relative', ...
+    'ExposureFraction',0.05,'SubtrackLength',40,'CIMethod','none');
+
+% Per-track distribution with sigma fixed to population value
+alpha_dist = tc.getFBMAlphaDistribution( ...
+    'TrackType',        'relative', ...
+    'ExposureFraction',  0.05,      ...
+    'MaxSubtrackLength', 40,        ...
+    'FixSigma',          true,      ...
+    'MinTrackLength',    20,        ...
+    'MinStepVar',        4*fbm.sigma^2);
+
+figure;
+histogram(alpha_dist.alpha, 30, 'Normalization','probability');
+xlabel('\alpha'); ylabel('Fraction');
+title(sprintf('Per-track \\alpha  (n=%d, \\sigma=%.3f µm)', ...
+    alpha_dist.n_tracks, alpha_dist.sigma_fixed));</code></pre>
 
 <!-- ════════════════════════════════════════════════════════════════════ -->
 <h2>Confidence intervals</h2>

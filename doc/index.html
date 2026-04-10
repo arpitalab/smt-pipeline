@@ -10,9 +10,15 @@
 
 <nav>
   <a class="home" href="index.html">smt-pipeline</a>
-  <a href="fbm_analysis.html">fBM Analysis</a>
-  <a href="track_filtering.html">Track Filtering</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
   <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
 </nav>
 
 <div class="page-wrap">
@@ -21,88 +27,174 @@
 
 <p>
 MATLAB toolbox for single-molecule tracking (SMT) analysis built around
-<code>TrajectoryCollection</code>. Trajectories are loaded from CSV files
-(quot) or SMD objects and flow into MSD, Richardson-Lucy, Bayesian diffusivity,
-and fBM maximum-likelihood analyses.
+<code>TrajectoryCollection</code> and <code>TrajectoryWrapper</code>.
+Trajectories are loaded from CSV files or SMD objects and flow into MSD,
+Richardson-Lucy, Bayesian diffusivity, fBM maximum-likelihood, and lifetime analyses.
 </p>
 
-<h2>New in this release</h2>
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2>Pipeline overview</h2>
 
-<div class="card-grid">
+<pre><code>                 CSV files                   SMD objects
+                    │                             │
+                    ▼                             ▼
+            TrajectoryWrapper ◄──────── TrajectoryWrapper.fromSMD()
+          (load → cull → relative)
+                    │
+                    ▼
+          TrajectoryCollection       ← aggregate N wrappers / conditions
+                    │
+          ┌─────────┼──────────────────────────────────┐
+          ▼         ▼              ▼           ▼        ▼
+        getMSD  getRLDecomp  getBayesian  getFBMParam  getLifetime
+        plotMSD  getFBMByRL   Diffusivity  getFBMAlpha   computeDACF
+               plotRLDecomp  computeBootCI plotFBMFit
+                              plotpEMstats</code></pre>
 
-  <a class="card" href="fbm_analysis.html">
-    <h3>fBM Analysis</h3>
-    <p>Toeplitz MLE parameter estimation, CI computation, and
-    <code>plotFBMFit</code> — overlay the MLE model curve on the
-    empirical ensemble MSD.</p>
-  </a>
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2>Quick start</h2>
 
-  <a class="card" href="track_filtering.html">
-    <h3>Track Filtering</h3>
-    <p>New <code>MinLength</code> and <code>MinMeanSqStep</code>
-    options in <code>getMSD</code> and <code>getFBMParameters</code>
-    to exclude short tracks and immobile particles.</p>
-  </a>
+<pre><code>run('setup_path.m');
 
-  <a class="card" href="struct_options.html">
-    <h3>Struct Options</h3>
-    <p>Pass a MATLAB struct instead of long name-value lists to any
-    analysis method. Define options once, reuse across conditions.</p>
-  </a>
+% --- Load data -----------------------------------------------------------
+tc = TrajectoryCollection();
+tc.ReadParams('experiment.toml');           % sets PixelSize, FrameInterval
+files = dir('data/*.csv');
+for k = 1:numel(files)
+    tc.addFromFile(fullfile(files(k).folder, files(k).name), ...
+                   'FileID', num2str(k), 'Condition', 'Control');
+end
+tc.summary();
 
-</div>
+% --- MSD -----------------------------------------------------------------
+msd = tc.recomputeMSD('TrackType','relative','MaxLag',40,'ExposureTime',0.01, ...
+                       'MinLength',40,'MinMeanSqStep',4*0.040^2,'NumBootstrap',100);
+tc.plotMSD('Title','H2B Control');
 
-<h2>Core methods at a glance</h2>
+% --- fBM MLE -------------------------------------------------------------
+fbm = tc.getFBMParameters('TrackType','relative','ExposureFraction',0.05, ...
+                            'SubtrackLength',40,'MinSubtrackLength',40, ...
+                            'MinMeanSqStep',4*0.040^2,'CIMethod','profile+mcmc');
+tc.plotFBMFit('FBMResults',fbm,'Title','H2B Control');
+
+% --- RL decomposition ----------------------------------------------------
+rl = tc.getRLDecomposition('TrackType','relative','LagTime',4,'String','H2B');
+tc.plotRLDecomposition();
+
+% --- Bayesian diffusivity (pEMv2) ----------------------------------------
+tc.getBayesianDiffusivity('Condition','Control');
+tc.computeBootstrapCI('nBoot',200);</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2>Core classes</h2>
 
 <table>
-  <thead>
-    <tr><th>Method</th><th>What it does</th></tr>
-  </thead>
+  <thead><tr><th>Class</th><th>Role</th></tr></thead>
   <tbody>
     <tr>
-      <td><code>getMSD</code> / <code>recomputeMSD</code></td>
-      <td>Ensemble time-averaged MSD with bootstrap confidence intervals and
-          least-squares fBM curve fit.</td>
+      <td><a href="data_loading.html#wrapper"><code>TrajectoryWrapper</code></a></td>
+      <td>Single FOV: loads CSV or SMD, culls tracks (ROI + gap filter), removes global cell motion via maximum spanning forest.</td>
     </tr>
     <tr>
-      <td><code>getFBMParameters</code></td>
-      <td>Population Toeplitz MLE of K, α, σ with profile-likelihood or MCMC
-          confidence intervals.</td>
+      <td><a href="data_loading.html#collection"><code>TrajectoryCollection</code></a></td>
+      <td>Aggregates N wrappers across conditions. All analysis methods live here.</td>
     </tr>
     <tr>
-      <td><code>plotMSD</code></td>
-      <td>Log-log plot of ensemble MSD with bootstrap CI shading and median
-          fit curve.</td>
-    </tr>
-    <tr>
-      <td><code>plotFBMFit</code></td>
-      <td>Overlay the Toeplitz MLE model curve on the empirical MSD for
-          direct comparison of the two estimation methods.</td>
-    </tr>
-    <tr>
-      <td><code>getRLDecomposition</code></td>
-      <td>Richardson-Lucy MSD distribution decomposition via RL_HILO.</td>
-    </tr>
-    <tr>
-      <td><code>getFBMByRLState</code></td>
-      <td>Per-RL-state Toeplitz MLE fBM fits.</td>
-    </tr>
-    <tr>
-      <td><code>getFBMAlphaDistribution</code></td>
-      <td>Per-track (K, α) distribution with optional fixed σ.</td>
-    </tr>
-    <tr>
-      <td><code>getBayesianDiffusivity</code></td>
-      <td>Bayesian (pEMv2) diffusivity classification.</td>
-    </tr>
-    <tr>
-      <td><code>getLifetime</code></td>
-      <td>Fluorophore lifetime distribution with exponential fits.</td>
+      <td><a href="smt_database.html"><code>SMTDatabase</code></a></td>
+      <td>SQLite registry: registers collections, logs analysis runs, enables cross-experiment queries.</td>
     </tr>
   </tbody>
 </table>
 
-<footer>smt-pipeline &mdash; see <a href="../README.md">README</a> for installation and quick-start.</footer>
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2>All analysis methods</h2>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>Page</th><th>What it does</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>getMSD</code> / <code>recomputeMSD</code></td>
+      <td><a href="msd_analysis.html">MSD</a></td>
+      <td>Ensemble time-averaged MSD with bootstrap CI and least-squares fBM curve fit.</td>
+    </tr>
+    <tr>
+      <td><code>plotMSD</code></td>
+      <td><a href="msd_analysis.html">MSD</a></td>
+      <td>Log-log MSD plot with CI shading and median fit curve.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMParameters</code></td>
+      <td><a href="fbm_analysis.html">fBM</a></td>
+      <td>Population Toeplitz MLE of K, α, σ with profile-likelihood or MCMC confidence intervals.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMAlphaDistribution</code></td>
+      <td><a href="fbm_analysis.html#alpha-dist">fBM</a></td>
+      <td>Per-track (K, α) distribution; sigma optionally fixed to population value.</td>
+    </tr>
+    <tr>
+      <td><code>plotFBMFit</code></td>
+      <td><a href="fbm_analysis.html#plotfbmfit">fBM</a></td>
+      <td>Overlay Toeplitz MLE model curve on empirical ensemble MSD.</td>
+    </tr>
+    <tr>
+      <td><code>getRLDecomposition</code></td>
+      <td><a href="rl_analysis.html">RL</a></td>
+      <td>Richardson-Lucy MSD distribution decomposition via RL_HILO.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMByRLState</code></td>
+      <td><a href="rl_analysis.html#fbm-by-state">RL</a></td>
+      <td>Population fBM MLE run independently on each RL-classified state.</td>
+    </tr>
+    <tr>
+      <td><code>plotRLDecomposition</code></td>
+      <td><a href="rl_analysis.html#plot">RL</a></td>
+      <td>Reproduce van Hove, P(MSD), and per-state MSD figures.</td>
+    </tr>
+    <tr>
+      <td><code>getBayesianDiffusivity</code></td>
+      <td><a href="pem_analysis.html">pEM</a></td>
+      <td>Bayesian (pEMv2) diffusivity classification into optimal number of states.</td>
+    </tr>
+    <tr>
+      <td><code>computeBootstrapCI</code></td>
+      <td><a href="pem_analysis.html#bootstrap">pEM</a></td>
+      <td>Bootstrap confidence intervals on pEM state fractions and diffusivities.</td>
+    </tr>
+    <tr>
+      <td><code>plotpEMstats</code></td>
+      <td><a href="pem_analysis.html#plot">pEM</a></td>
+      <td>Per-state MSD plots from pEM classification.</td>
+    </tr>
+    <tr>
+      <td><code>getLifetime</code></td>
+      <td><a href="lifetime.html">Lifetime</a></td>
+      <td>Bound-particle dwell-time distribution with exponential fits.</td>
+    </tr>
+    <tr>
+      <td><code>computeDACF</code></td>
+      <td><a href="lifetime.html#dacf">Lifetime &amp; DACF</a></td>
+      <td>Displacement autocorrelation function — diagnostic for fBM anomalous exponent.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<h2>Key parameters and track types</h2>
+
+<table>
+  <thead><tr><th>TrackType</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>'culled'</code></td><td>Tracks that passed ROI membership and gap-consistency culling (default for all methods).</td></tr>
+    <tr><td><code>'relative'</code></td><td>Culled tracks with global cell motion subtracted via maximum spanning forest. Use for fBM analysis to remove correlated drift.</td></tr>
+    <tr><td><code>'raw'</code></td><td>All loaded tracks before any filtering.</td></tr>
+  </tbody>
+</table>
+
+<footer>smt-pipeline docs &mdash; <a href="../README.md">README</a> for installation.</footer>
 </div>
 </body>
 </html>

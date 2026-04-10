@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pEM Analysis — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Bayesian Diffusivity (pEM)</h1>
+
+<p>
+The pEM analysis uses <strong>pEMv2_SPT</strong> — a permutation
+expectation-maximisation algorithm — to classify tracks into a data-driven
+optimal number of diffusive states and estimate each state's diffusion coefficient
+and localization noise. No prior assumption about the number of states is needed.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getBayesianDiffusivity</h2>
+
+<div class="sig">results = tc.getBayesianDiffusivity()
+results = tc.getBayesianDiffusivity('Condition','Control', 'SplitLength',7)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to one condition. When set, results are not cached on the object.</td></tr>
+    <tr><td><code>MinLength</code></td><td>6</td><td>Minimum track length in frames before splitting.</td></tr>
+    <tr><td><code>SplitLength</code></td><td>7</td><td>Track split length (frames). Tracks are split into non-overlapping segments before pEM runs. Shorter splits increase the number of subtracks but reduce the number of features available per segment.</td></tr>
+    <tr><td><code>NumFeatures</code></td><td>SplitLength−1</td><td>Number of velocity autocorrelation features used. Capped at 10. Default is <code>SplitLength−1</code>.</td></tr>
+    <tr><td><code>ForceRecompute</code></td><td>[]</td><td>Force rerun (auto-true on first call or when <code>Condition</code> is set).</td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <strong>SplitLength guidance:</strong>
+  The default <code>SplitLength=7</code> is appropriate for pEM but is too short
+  for fBM analysis (alpha collapses toward 1 with short subtracks). For
+  <code>getFBMByRLState</code> or <code>getFBMParameters</code> use
+  <code>SubtrackLength ≥ 20</code>.
+</div>
+
+<h3>Algorithm internals</h3>
+<p>
+pEMv2 builds a velocity autocorrelation (VACF) feature vector for each split
+subtrack, then runs EM over K=1…8 Gaussian mixture states, initializing
+<code>numReinitialize=20</code> times and perturbing
+<code>numPerturbation=200</code> times to escape local optima. BIC selects the
+optimal K. The algorithm reports:
+</p>
+<ul>
+  <li><strong>optimalD</strong> — diffusion coefficient per state (µm²/s).</li>
+  <li><strong>optimalS</strong> — localization noise σ per state (µm).</li>
+  <li><strong>optimalP</strong> — population fraction per state.</li>
+  <li><strong>posteriorProb</strong> — N_subtracks × K posterior probability matrix.</li>
+</ul>
+
+<h3>Result structure</h3>
+<p>
+Stored in <code>tc.pEMResults</code>. Key fields:
+</p>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.pEMTable</code></td><td>MATLAB table; one row. Contains <code>optimalD</code>, <code>optimalS</code>, <code>optimalP</code>, <code>optimalVacf</code>, <code>posteriorProb</code>, <code>optimalSize</code> (selected K), BIC, splitX, trackID, splitID.</td></tr>
+    <tr><td><code>.proportions</code></td><td>Table: State, Proportion, OptimalD, OptimalS — one row per state, sorted by D.</td></tr>
+  </tbody>
+</table>
+
+<h3>Accessing results</h3>
+<pre><code>tc.getBayesianDiffusivity('Condition','Control');
+
+% Population fractions and diffusivities
+prop = tc.pEMResults.proportions;
+disp(prop);
+
+% Per-subtrack classification
+pp        = tc.pEMResults.pEMTable.posteriorProb{1};
+[~, state] = max(pp, [], 2);   % most probable state for each subtrack
+
+% Posterior confidence filter (optional)
+max_pp     = max(pp, [], 2);
+conf       = max_pp > 0.5;     % high-confidence assignments only
+
+% Diffusion coefficients (sorted ascending)
+D = tc.pEMResults.pEMTable.optimalD{1};   % µm²/s</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="bootstrap">computeBootstrapCI</h2>
+
+<p>
+Computes confidence intervals on pEM state fractions and diffusion coefficients
+by resampling parent tracks and re-running pEMv2.
+Must be called <em>after</em> <code>getBayesianDiffusivity()</code> on the full
+collection (without a <code>Condition</code> filter).
+</p>
+
+<div class="sig">ciResults = tc.computeBootstrapCI()
+ciResults = tc.computeBootstrapCI('nBoot',200, 'parallel',true, 'resampleLevel','parent')</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>nBoot</code></td><td>100</td><td>Number of bootstrap resamples.</td></tr>
+    <tr><td><code>covModel</code></td><td><code>'normal'</code></td><td>Covariance model: <code>'normal'</code> | <code>'confined'</code> | <code>'fBM'</code>.</td></tr>
+    <tr><td><code>alpha</code></td><td>0.05</td><td>CI level: 1−alpha (e.g. 0.05 → 95% CI).</td></tr>
+    <tr><td><code>nRandomStarts</code></td><td>5</td><td>EM restarts per bootstrap replicate.</td></tr>
+    <tr><td><code>resampleLevel</code></td><td><code>'parent'</code></td><td>Resample at parent track level (<code>'parent'</code>) or subtrack level (<code>'subtracks'</code>).</td></tr>
+    <tr><td><code>parallel</code></td><td>true</td><td>Use parfor (requires Parallel Computing Toolbox).</td></tr>
+    <tr><td><code>verbose</code></td><td>true</td><td>Print bootstrap progress.</td></tr>
+  </tbody>
+</table>
+
+<p>Results are stored in <code>tc.pEMResults.ciresults</code>.</p>
+
+<pre><code>tc.getBayesianDiffusivity();         % must run on full collection first
+ci = tc.computeBootstrapCI('nBoot', 200, 'parallel', true);
+% ci contains CI bounds on D, S, and population fractions per state</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="plot">plotpEMstats</h2>
+
+<div class="sig">fig = tc.plotpEMstats()</div>
+
+<p>
+Produces a per-state ensemble MSD plot using the pEM-classified subtracks.
+States with population fraction &lt; 2.5% or posterior probability &lt; 0.5 are
+excluded. State MSD curves are plotted as mean ± SEM error bars.
+</p>
+
+<div class="note">
+  <strong>Hardcoded split length:</strong> <code>plotpEMstats</code> currently
+  uses a hardcoded <code>splitLength = 7</code> (matching the pEM default).
+  The x-axis shows lags from 0 to 6 frames.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Typical workflow</h2>
+
+<pre><code>% Run pEM on all culled tracks
+tc.getBayesianDiffusivity();
+
+% Check proportions
+disp(tc.pEMResults.proportions);
+
+% Run bootstrap CI (parallel if pool available)
+tc.computeBootstrapCI('nBoot', 200);
+
+% Plot per-state MSD
+tc.plotpEMstats();
+
+% Save full results
+save('results/H2B_control.mat', '-struct', 'tc');  % or use SMTDatabase</code></pre>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>
