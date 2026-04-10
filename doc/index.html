@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>smt-pipeline documentation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="fbm_analysis.html">fBM Analysis</a>
+  <a href="track_filtering.html">Track Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>smt-pipeline documentation</h1>
+
+<p>
+MATLAB toolbox for single-molecule tracking (SMT) analysis built around
+<code>TrajectoryCollection</code>. Trajectories are loaded from CSV files
+(quot) or SMD objects and flow into MSD, Richardson-Lucy, Bayesian diffusivity,
+and fBM maximum-likelihood analyses.
+</p>
+
+<h2>New in this release</h2>
+
+<div class="card-grid">
+
+  <a class="card" href="fbm_analysis.html">
+    <h3>fBM Analysis</h3>
+    <p>Toeplitz MLE parameter estimation, CI computation, and
+    <code>plotFBMFit</code> — overlay the MLE model curve on the
+    empirical ensemble MSD.</p>
+  </a>
+
+  <a class="card" href="track_filtering.html">
+    <h3>Track Filtering</h3>
+    <p>New <code>MinLength</code> and <code>MinMeanSqStep</code>
+    options in <code>getMSD</code> and <code>getFBMParameters</code>
+    to exclude short tracks and immobile particles.</p>
+  </a>
+
+  <a class="card" href="struct_options.html">
+    <h3>Struct Options</h3>
+    <p>Pass a MATLAB struct instead of long name-value lists to any
+    analysis method. Define options once, reuse across conditions.</p>
+  </a>
+
+</div>
+
+<h2>Core methods at a glance</h2>
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>What it does</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>getMSD</code> / <code>recomputeMSD</code></td>
+      <td>Ensemble time-averaged MSD with bootstrap confidence intervals and
+          least-squares fBM curve fit.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMParameters</code></td>
+      <td>Population Toeplitz MLE of K, α, σ with profile-likelihood or MCMC
+          confidence intervals.</td>
+    </tr>
+    <tr>
+      <td><code>plotMSD</code></td>
+      <td>Log-log plot of ensemble MSD with bootstrap CI shading and median
+          fit curve.</td>
+    </tr>
+    <tr>
+      <td><code>plotFBMFit</code></td>
+      <td>Overlay the Toeplitz MLE model curve on the empirical MSD for
+          direct comparison of the two estimation methods.</td>
+    </tr>
+    <tr>
+      <td><code>getRLDecomposition</code></td>
+      <td>Richardson-Lucy MSD distribution decomposition via RL_HILO.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMByRLState</code></td>
+      <td>Per-RL-state Toeplitz MLE fBM fits.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMAlphaDistribution</code></td>
+      <td>Per-track (K, α) distribution with optional fixed σ.</td>
+    </tr>
+    <tr>
+      <td><code>getBayesianDiffusivity</code></td>
+      <td>Bayesian (pEMv2) diffusivity classification.</td>
+    </tr>
+    <tr>
+      <td><code>getLifetime</code></td>
+      <td>Fluorophore lifetime distribution with exponential fits.</td>
+    </tr>
+  </tbody>
+</table>
+
+<footer>smt-pipeline &mdash; see <a href="../README.md">README</a> for installation and quick-start.</footer>
+</div>
+</body>
+</html>

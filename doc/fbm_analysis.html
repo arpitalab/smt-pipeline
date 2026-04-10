@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fBM Analysis — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="fbm_analysis.html">fBM Analysis</a>
+  <a href="track_filtering.html">Track Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>fBM Analysis</h1>
+
+<p>
+The pipeline fits fractional Brownian motion (fBM) to 2D single-molecule tracks
+using two complementary methods: an ensemble Toeplitz maximum-likelihood estimator
+(MLE) and a bootstrap ensemble MSD least-squares fit. This page covers
+<code>getFBMParameters</code>, <code>plotFBMFit</code>, and how to interpret
+the relationship between the two methods.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Background: the Backlund exposure-time model</h2>
+
+<p>
+Both methods use the Backlund et al. (Phys. Rev. E, 2015) covariance kernel,
+which accounts for the finite camera exposure time <em>T</em><sub>e</sub>:
+</p>
+
+<pre><code>ψ(τ, Tₑ, α) = [(τ+Tₑ)^(α+2) + |τ−Tₑ|^(α+2) − 2τ^(α+2)]
+               / [Tₑ² (α+1)(α+2)]</code></pre>
+
+<p>
+The expected 2D ensemble MSD at lag <em>n</em> frames is:
+</p>
+
+<pre><code>MSD₂ᴅ(n) = 4K [ψ(n·dt, Tₑ, α) − ψ(0, Tₑ, α)] + 4σ²</code></pre>
+
+<p>where <em>K</em> is the per-axis generalized diffusion coefficient (µm²/s<sup>α</sup>),
+<em>α</em> is the anomalous exponent (0&lt;α&lt;2), and <em>σ</em> is the
+per-axis localization noise (µm). Note that ψ(0) = 2T<sub>e</sub><sup>α</sup>/[(α+1)(α+2)]
+is non-zero when the exposure time is finite.</p>
+
+<div class="note">
+  <strong>Which K?</strong>
+  <em>K</em> in this pipeline is always the <em>per-axis</em> (1D) generalized
+  diffusion coefficient. The 2D MSD scales as 4K, matching the standard
+  convention MSD = 4Dt for Brownian motion (α=1).
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getFBMParameters</h2>
+
+<p>
+Fits K, α, σ by maximising the Toeplitz Gaussian log-likelihood of the
+2D displacement time series. x and y are treated as independent with
+identical covariance:
+</p>
+
+<pre><code>ℓ = Σ_L N_L·(−n·log 2π − log|Σ_L|) − ½ tr(Σ_L⁻¹ S_L)</code></pre>
+
+<p>where S<sub>L</sub> = Σ<sub>k</sub>(Δx<sub>k</sub>Δx<sub>k</sub>ᵀ +
+Δy<sub>k</sub>Δy<sub>k</sub>ᵀ) is the sufficient-statistic matrix for
+subtracks of length L, computed once at startup for O(n³) per-evaluation cost.</p>
+
+<h3>Signature</h3>
+<div class="sig">results = tc.getFBMParameters(opts)
+results = tc.getFBMParameters('TrackType','relative', 'ExposureFraction',0.05, ...)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Name</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>TrackType</code></td><td><code>'culled'</code></td>
+        <td><code>'culled'</code> | <code>'relative'</code> | <code>'raw'</code>.
+        Use <code>'relative'</code> for cell-motion-corrected tracks.</td></tr>
+    <tr><td><code>ExposureFraction</code></td><td><code>1</code></td>
+        <td>T<sub>e</sub>/dt ratio. Set to <em>exposure_time / frame_interval</em>
+        (e.g. 0.05 for 10 ms exposure at 200 ms interval). Default 1 = stroboscopic.</td></tr>
+    <tr><td><code>SubtrackLength</code></td><td><code>20</code></td>
+        <td>Target frames per subtrack. Controls the maximum lag used in the
+        covariance fit. Longer subtracks give more information per track but
+        require longer tracks.</td></tr>
+    <tr><td><code>MinSubtrackLength</code></td><td><code>10</code></td>
+        <td>Minimum frames for a subtrack to be included. Setting
+        <code>MinSubtrackLength = SubtrackLength</code> uses only complete
+        subtracks of a single fixed length.</td></tr>
+    <tr><td><code>MinMeanSqStep</code></td><td><code>0</code></td>
+        <td>Immobility threshold (µm²). Tracks with mean one-step squared
+        displacement below this value are excluded. Typical value:
+        4·σ<sub>fixed</sub>² where σ<sub>fixed</sub> is measured from
+        immobile particles. See <a href="track_filtering.html">Track Filtering</a>.</td></tr>
+    <tr><td><code>CIMethod</code></td><td><code>'profile'</code></td>
+        <td>Confidence interval method:
+        <code>'profile'</code> (likelihood-ratio, recommended),
+        <code>'profile+mcmc'</code> (profile-calibrated MCMC),
+        <code>'mcmc'</code>,
+        <code>'hessian'</code> (fast but approximate),
+        <code>'none'</code>.</td></tr>
+    <tr><td><code>ProfilePoints</code></td><td><code>60</code></td>
+        <td>Grid points per parameter for profile CI.</td></tr>
+    <tr><td><code>MCMCSamples</code></td><td><code>5000</code></td>
+        <td>Posterior samples after burn-in (MCMC methods only).</td></tr>
+    <tr><td><code>Condition</code></td><td><code>[]</code></td>
+        <td>Restrict to one condition string. Results from subset queries are
+        returned but <em>not</em> cached on the object.</td></tr>
+    <tr><td><code>ForceRecompute</code></td><td><code>false</code></td>
+        <td>Bypass cache and refit. The cache is automatically invalidated when
+        any of ExposureFraction, SubtrackLength, MinSubtrackLength,
+        MinMeanSqStep, or CIMethod changes.</td></tr>
+  </tbody>
+</table>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>K</code></td><td>Generalized diffusion coefficient (µm²/s<sup>α</sup>), per-axis.</td></tr>
+    <tr><td><code>Ka</code></td><td>Transport parameter K·α (more robustly estimated than K alone).</td></tr>
+    <tr><td><code>alpha</code></td><td>Anomalous exponent (0, 2).</td></tr>
+    <tr><td><code>sigma</code></td><td>Per-axis localization precision (µm).</td></tr>
+    <tr><td><code>loglik</code></td><td>Total log-likelihood at the MLE.</td></tr>
+    <tr><td><code>CI</code></td><td>Struct with 95% bounds: <code>.K</code>, <code>.Ka</code>,
+        <code>.alpha</code>, <code>.sigma</code> each [lower, upper].
+        Empty struct when <code>CIMethod='none'</code>.</td></tr>
+    <tr><td><code>n_subtracks</code></td><td>Number of subtracks used in the fit.</td></tr>
+    <tr><td><code>frac</code></td><td>ExposureFraction used (stored for cache validation and plotting).</td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <strong>TrackType='relative' results are not cached on the object.</strong>
+  Any <code>TrackType</code> other than <code>'culled'</code>, or any non-empty
+  <code>Condition</code>, is treated as a subset query. The result is returned
+  in the output variable but not stored in <code>tc.FBMResults</code>. Pass the
+  returned struct explicitly to <code>plotFBMFit</code>.
+</div>
+
+<h3>Example</h3>
+<pre><code>sigma_fixed = 0.040;   % µm, from fixed-particle measurement
+
+fbm_opts = struct( ...
+    'TrackType',        'relative',       ...
+    'ExposureFraction', 0.05,             ...
+    'SubtrackLength',   40,               ...
+    'MinSubtrackLength',40,               ...
+    'MinMeanSqStep',    4*sigma_fixed^2,  ...
+    'CIMethod',         'profile+mcmc');
+
+fbm = tc.getFBMParameters(fbm_opts);
+
+fprintf('alpha = %.3f  [%.3f, %.3f]\n', ...
+        fbm.alpha, fbm.CI.alpha(1), fbm.CI.alpha(2));
+fprintf('K     = %.4g  [%.4g, %.4g] µm²/s^alpha\n', ...
+        fbm.K, fbm.CI.K(1), fbm.CI.K(2));
+fprintf('sigma = %.4f  [%.4f, %.4f] µm\n', ...
+        fbm.sigma, fbm.CI.sigma(1), fbm.CI.sigma(2));</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>plotFBMFit</h2>
+
+<p>
+Overlays the Toeplitz MLE model curve on the empirical ensemble MSD.
+Requires <code>getMSD</code> to have been run first. Because
+<code>getFBMParameters</code> with <code>TrackType='relative'</code> does not
+cache results on the object, the FBM result struct must be passed explicitly via
+the <code>FBMResults</code> parameter.
+</p>
+
+<h3>Signature</h3>
+<div class="sig">figs = tc.plotFBMFit('FBMResults', fbm)
+figs = tc.plotFBMFit(struct('FBMResults',fbm, 'Title','ER 100k Slow'))</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Name</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>FBMResults</code></td><td><code>[]</code></td>
+        <td>Struct returned by <code>getFBMParameters</code>. Required when using
+        <code>TrackType='relative'</code> or a Condition filter; optional for
+        culled-track results cached on the object.</td></tr>
+    <tr><td><code>Color</code></td><td><code>[0 0.4 0.8]</code></td>
+        <td>RGB colour for the empirical MSD and CI shading.</td></tr>
+    <tr><td><code>Title</code></td><td><em>auto</em></td>
+        <td>Figure title. Defaults to "MSD + Toeplitz MLE (n=N tracks)".</td></tr>
+    <tr><td><code>ShowBootstrap</code></td><td><code>true</code></td>
+        <td>Overlay the median bootstrap MSD least-squares fit curve for
+        comparison with the Toeplitz MLE curve.</td></tr>
+  </tbody>
+</table>
+
+<h3>What the plot shows</h3>
+<table>
+  <thead><tr><th>Element</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>Shaded band</td><td>95% bootstrap CI on the ensemble mean MSD.</td></tr>
+    <tr><td>Solid line</td><td>Empirical ensemble mean TAMSD (time-and-ensemble average).</td></tr>
+    <tr><td>Dashed coloured line</td><td>Median bootstrap MSD least-squares fit
+        (shown when <code>ShowBootstrap=true</code>). Reports α from the MSD fit.</td></tr>
+    <tr><td>Dashed black line</td><td>Toeplitz MLE model curve computed from K, α, σ
+        using the exact Backlund formula. Reports MLE α, K, σ.</td></tr>
+  </tbody>
+</table>
+
+<h3>Interpreting differences between the two curves</h3>
+<table>
+  <thead><tr><th>Observation</th><th>Likely cause</th></tr></thead>
+  <tbody>
+    <tr><td>MLE curve matches MSD, same α</td><td>Data is consistent with pure fBM. Both estimators agree.</td></tr>
+    <tr><td>MLE α &gt; MSD α, curves diverge at short lags</td>
+        <td>MSD fit is biased by the localization noise floor at short lags,
+        making the slope appear shallower. MLE α is more reliable.</td></tr>
+    <tr><td>Parallel offset (same α, MLE curve lower)</td>
+        <td>MSD ensemble includes shorter tracks with higher localization noise
+        than the subpopulation used by the MLE. Apply <code>MinLength</code> to
+        align the two populations.</td></tr>
+    <tr><td>Large discrepancy, curves cross</td>
+        <td>Data is likely not pure fBM — mixed states, confinement, or
+        non-stationary dynamics.</td></tr>
+  </tbody>
+</table>
+
+<h3>Full workflow example</h3>
+<pre><code>sigma_fixed = 0.040;   % µm, independently measured
+
+% --- Options structs ---
+msd_opts = struct( ...
+    'TrackType',     'relative', ...
+    'MinLength',      40,         ...
+    'MinMeanSqStep',  4*sigma_fixed^2, ...
+    'MaxLag',         40,         ...
+    'NumBootstrap',   100,        ...
+    'ExposureTime',   0.01);
+
+fbm_opts = struct( ...
+    'TrackType',          'relative',        ...
+    'ExposureFraction',    0.05,             ...
+    'SubtrackLength',      40,               ...
+    'MinSubtrackLength',   40,               ...
+    'MinMeanSqStep',       4*sigma_fixed^2,  ...
+    'CIMethod',           'profile+mcmc');
+
+% --- Compute ---
+tc.recomputeMSD(msd_opts);
+fbm = tc.getFBMParameters(fbm_opts);
+
+% --- Visualise ---
+tc.plotFBMFit(struct('FBMResults', fbm, 'Title', 'ER 100k Slow'));</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Choosing SubtrackLength</h2>
+
+<p>
+SubtrackLength controls how many consecutive displacement increments enter
+each covariance matrix. Longer subtracks capture more of the fBM correlation
+structure, but require longer tracks and increase compute time.
+</p>
+
+<table>
+  <thead><tr><th>SubtrackLength</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>10–15</td><td>Fast. Suitable for noisy data or when tracks are short.
+        Less information about long-lag correlations.</td></tr>
+    <tr><td>20</td><td>Good default for most SMT experiments.</td></tr>
+    <tr><td>40</td><td>Recommended when tracks are long and you want to resolve
+        the full correlation structure. Also aligns the MLE track population
+        with a <code>MinLength=40</code> MSD filter.</td></tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <strong>Tip:</strong> set <code>SubtrackLength = MinSubtrackLength</code> to
+  use only complete subtracks of a single fixed length. This gives a homogeneous
+  covariance matrix size and avoids any averaging artefacts from mixing subtrack
+  lengths.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Confidence intervals</h2>
+
+<p>Three CI methods are available:</p>
+
+<table>
+  <thead><tr><th>Method</th><th>Speed</th><th>When to use</th></tr></thead>
+  <tbody>
+    <tr><td><code>'profile'</code></td><td>Minutes</td>
+        <td>Default. Likelihood-ratio intervals; correct for asymmetry and
+        banana-shaped posteriors. Sweeps a grid of 60 points per parameter
+        (adjustable via <code>ProfilePoints</code>).</td></tr>
+    <tr><td><code>'profile+mcmc'</code></td><td>Minutes–hours</td>
+        <td>Profile first, then short MCMC (300-step burn-in) calibrated
+        by the profile marginals. Most accurate; use for final reported values.</td></tr>
+    <tr><td><code>'mcmc'</code></td><td>Hours</td>
+        <td>Full adaptive Metropolis-Hastings from the MLE. Use when the
+        profile is unreliable (very flat likelihood).</td></tr>
+    <tr><td><code>'hessian'</code></td><td>Seconds</td>
+        <td>Laplace approximation. Fast but poor for this problem; diagnostic
+        use only.</td></tr>
+    <tr><td><code>'none'</code></td><td>Seconds</td>
+        <td>MLE only, no CI. Useful for quick exploration.</td></tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>Why CI is slow when SubtrackLength ≠ MinSubtrackLength:</strong>
+  Each profile step must invert a separate covariance matrix for every distinct
+  subtrack length present in the data. When all subtracks have the same length
+  (SubtrackLength = MinSubtrackLength), only one matrix size is needed and CI
+  computation is much faster.
+</div>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Track Filtering — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="fbm_analysis.html">fBM Analysis</a>
+  <a href="track_filtering.html">Track Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Track Filtering</h1>
+
+<p>
+Two optional filters can be applied in <code>getMSD</code> and
+<code>getFBMParameters</code> before any computation: a minimum track length
+filter and an immobility filter. Both are applied to the track list after
+loading and before any MSD or likelihood computation.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>MinLength — minimum track length</h2>
+
+<p>
+Excludes tracks shorter than a given number of frames. Applied to both
+<code>getMSD</code> and <code>getFBMParameters</code>.
+</p>
+
+<h3>Why use it</h3>
+<p>
+The Toeplitz MLE requires subtracks of at least <code>MinSubtrackLength</code>
+frames. Short tracks that fail this criterion contribute nothing to the MLE but
+<em>do</em> contribute to the ensemble MSD — inflating the noise floor with
+poorly localised molecules. Matching the <code>MinLength</code> in
+<code>getMSD</code> to the <code>SubtrackLength</code> / <code>MinSubtrackLength</code>
+used in <code>getFBMParameters</code> ensures both methods see the same track
+population, eliminating systematic vertical offsets in <code>plotFBMFit</code>.
+</p>
+
+<h3>Usage</h3>
+<pre><code>% getMSD: include only tracks >= 40 frames
+tc.recomputeMSD('TrackType','relative', 'MinLength',40, ...
+                'MaxLag',40, 'ExposureTime',0.01);
+
+% getFBMParameters: same population
+fbm = tc.getFBMParameters('TrackType','relative', ...
+                           'SubtrackLength',40, 'MinSubtrackLength',40, ...);</code></pre>
+
+<div class="tip">
+  <strong>Rule of thumb:</strong> set <code>MinLength = SubtrackLength</code>
+  so the MSD and MLE see exactly the same tracks.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>MinMeanSqStep — immobility filter</h2>
+
+<p>
+Excludes tracks whose <em>mean one-step squared displacement</em> (µm²) falls
+below a threshold. Applied to both <code>getMSD</code> and
+<code>getFBMParameters</code>.
+</p>
+
+<pre><code>mean_sq_step(track) = mean( diff(x).^2 + diff(y).^2 )</code></pre>
+
+<h3>Why remove immobile tracks</h3>
+<p>
+Immobile particles (stuck to the coverslip, aggregated, or non-specifically
+bound) appear as pure localization noise in the fBM model. Their inclusion:
+</p>
+<ul>
+  <li>Inflates the estimated σ, pulling it toward the localization noise of
+      stationary emitters rather than diffusing ones.</li>
+  <li>Pulls α toward 0 — immobile tracks look like extremely subdiffusive fBM.</li>
+  <li>Inflates the short-lag MSD, making the power-law slope appear shallower.</li>
+</ul>
+
+<h3>Choosing the threshold</h3>
+
+<p>
+The recommended threshold is <strong>4·σ<sub>fixed</sub>²</strong>, where
+σ<sub>fixed</sub> is the per-axis localization precision measured from
+truly immobile particles (e.g. fixed fluorescent beads or adsorbed
+single molecules) imaged under identical conditions.
+</p>
+
+<pre><code>% From fixed-particle measurement
+sigma_fixed = 0.040;            % µm  (40 nm)
+thresh = 4 * sigma_fixed^2;     % µm² (= 0.0064 µm²)
+
+% Apply in both methods
+tc.recomputeMSD('MinMeanSqStep', thresh, ...);
+fbm = tc.getFBMParameters('MinMeanSqStep', thresh, ...);</code></pre>
+
+<div class="note">
+  <strong>Why 4σ²?</strong>
+  The expected 2D mean squared step for a truly immobile particle is
+  4σ² (the sum of two independent noise contributions, one per displacement,
+  each of variance 2σ² across two axes). Any track below this threshold has
+  less average displacement than you would expect from localization noise alone,
+  so it cannot be distinguished from an immobile particle.
+</div>
+
+<div class="note">
+  <strong>Relation to SNR filtering:</strong>
+  If your localizer already rejects individual spots below a minimum SNR
+  (e.g. SNR &lt; 2), low-quality frames are excluded at the track level —
+  tracks end or acquire gaps when SNR drops. The <code>MinMeanSqStep</code>
+  filter operates at the <em>track</em> level and is complementary: it removes
+  tracks that are systematically non-mobile regardless of per-frame SNR.
+</div>
+
+<h3>Console output</h3>
+<p>When the filter removes tracks, a summary is printed:</p>
+<pre><code>getMSD: removed 312 immobile tracks (MinMeanSqStep=0.0064 µm²), 4105 remain.
+getFBMParameters: removed 312 immobile tracks (MinMeanSqStep=0.0064 µm²), 4105 remain.</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Filter order</h2>
+
+<p>
+Filters are applied in the following order inside each method:
+</p>
+
+<ol>
+  <li><strong>Track loading</strong> — all tracks of the requested
+      <code>TrackType</code> and <code>Condition</code> are loaded.</li>
+  <li><strong>MinLength</strong> — short tracks are dropped.</li>
+  <li><strong>MinMeanSqStep</strong> — immobile tracks are dropped.</li>
+  <li><strong>Computation</strong> — MSD or MLE runs on the surviving tracks.</li>
+</ol>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Combined example</h2>
+
+<pre><code>sigma_fixed = 0.040;   % µm
+
+msd_opts = struct( ...
+    'TrackType',     'relative',      ...
+    'MinLength',      40,             ...
+    'MinMeanSqStep',  4*sigma_fixed^2,...
+    'MaxLag',         40,            ...
+    'NumBootstrap',   100,           ...
+    'ExposureTime',   0.01);
+
+fbm_opts = struct( ...
+    'TrackType',          'relative',        ...
+    'MinMeanSqStep',       4*sigma_fixed^2,  ...
+    'ExposureFraction',    0.05,             ...
+    'SubtrackLength',      40,               ...
+    'MinSubtrackLength',   40,               ...
+    'CIMethod',           'profile+mcmc');
+
+tc.recomputeMSD(msd_opts);
+fbm = tc.getFBMParameters(fbm_opts);
+tc.plotFBMFit(struct('FBMResults', fbm, 'Title', 'ER 100k Slow'));</code></pre>
+
+<p>
+With matching <code>MinLength</code> and <code>MinMeanSqStep</code>, the
+empirical MSD and the Toeplitz MLE curve in <code>plotFBMFit</code> will
+reflect the same track population. Any remaining vertical offset between
+the curves reflects a genuine difference in what the two estimators extract
+from the data, not a population mismatch.
+</p>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>

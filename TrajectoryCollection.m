@@ -269,6 +269,7 @@ classdef TrajectoryCollection < handle
             %     'CIMethod'         - CI method for per-state fBM MLE (default: 'none')
             %     'ForceRecompute'   - logical; default false
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'TrackType',        'culled',        @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
             addParameter(p, 'LagTime',          4,               @isnumeric);
@@ -403,11 +404,14 @@ classdef TrajectoryCollection < handle
             %   points only. The fit curve in plotMSD is extrapolated to the full
             %   lag range for display.
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'TrackType',      'culled', @(x) ischar(x)||isstring(x));
             addParameter(p, 'MaxLag',         25,       @isnumeric);
             addParameter(p, 'NumBootstrap',   50,       @isnumeric);
             addParameter(p, 'ExposureTime',   NaN,      @isnumeric);
+            addParameter(p, 'MinLength',       1,       @isnumeric);
+            addParameter(p, 'MinMeanSqStep',  0,       @isnumeric);
             addParameter(p, 'Condition',      [],       @(x) ischar(x)||isstring(x)||iscell(x));
             addParameter(p, 'ForceRecompute', false,    @islogical);
             parse(p, varargin{:});
@@ -447,6 +451,26 @@ classdef TrajectoryCollection < handle
 
                 if isempty(tracks)
                     error('getMSD: no tracks available (TrackType=''%s'').', trackType);
+                end
+
+                % --- MinLength filter -------------------------------------
+                if o.MinLength > 1
+                    tracks = tracks(cellfun(@(t) size(t,1), tracks) >= o.MinLength);
+                    if isempty(tracks)
+                        error('getMSD: no tracks of length >= %d (TrackType=''%s'').', ...
+                              o.MinLength, trackType);
+                    end
+                end
+
+                % --- Immobility filter ------------------------------------
+                if o.MinMeanSqStep > 0
+                    n_before = numel(tracks);
+                    tracks   = filter_mobile(tracks, o.MinMeanSqStep);
+                    if isempty(tracks)
+                        error('getMSD: no mobile tracks (MinMeanSqStep=%.4g).', o.MinMeanSqStep);
+                    end
+                    fprintf('getMSD: removed %d immobile tracks (MinMeanSqStep=%.4g µm²), %d remain.\n', ...
+                            n_before - numel(tracks), o.MinMeanSqStep, numel(tracks));
                 end
 
                 % --- Physical parameters ----------------------------------
@@ -563,10 +587,11 @@ classdef TrajectoryCollection < handle
                 obj.MSDResults.frac          = frac;
                 obj.MSDResults.track_type    = trackType;
                 obj.MSDResults.n_tracks      = nTracks;
+                obj.MSDResults.min_length    = o.MinLength;
                 obj.IsMSDComputed = true;
 
-                fprintf('getMSD: %d tracks, dt=%.4fs, frac=%.3f, MaxLag=%d, %d bootstrap samples.\n', ...
-                    nTracks, dt, frac, nLags, nBoot);
+                fprintf('getMSD: %d tracks (MinLength=%d), dt=%.4fs, frac=%.3f, MaxLag=%d, %d bootstrap samples.\n', ...
+                    nTracks, o.MinLength, dt, frac, nLags, nBoot);
             end
             results = obj.MSDResults;
         end
@@ -581,6 +606,7 @@ classdef TrajectoryCollection < handle
             % FrameInterval is read per-condition from wrappers.  If any
             % wrapper has FrameInterval=NaN this will error with a clear message.
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'Condition',      [], @(x) ischar(x)||isstring(x)||iscell(x));
             addParameter(p, 'ForceRecompute', [], @islogical);
@@ -793,12 +819,14 @@ classdef TrajectoryCollection < handle
             %   Result fields: K, Ka (=K*alpha), alpha, sigma, loglik,
             %                  n_subtracks, n_displacements, CI (if requested).
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'TrackType',         'culled', @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
             addParameter(p, 'Condition',         [],       @(x) ischar(x)||isstring(x)||iscell(x)||isempty(x));
             addParameter(p, 'ExposureFraction',  1,        @isnumeric);
             addParameter(p, 'SubtrackLength',    20,       @isnumeric);
             addParameter(p, 'MinSubtrackLength', 10,       @isnumeric);
+            addParameter(p, 'MinMeanSqStep',     0,        @isnumeric);
             addParameter(p, 'CIMethod',          'profile',@ischar);
             addParameter(p, 'ProfilePoints',     60,       @isnumeric);
             addParameter(p, 'MCMCSamples',       5000,     @isnumeric);
@@ -809,7 +837,25 @@ classdef TrajectoryCollection < handle
             trackType = lower(char(o.TrackType));
             isSubset  = ~isempty(o.Condition) || ~strcmp(trackType, 'culled');
 
-            if ~o.ForceRecompute && obj.IsFBMComputed && ~isSubset
+            % Return cached result only if all fitting options match what was previously used.
+            cached_ci_method = '';
+            if obj.IsFBMComputed && isfield(obj.FBMResults, 'CI') && isstruct(obj.FBMResults.CI)
+                cached_ci_method = obj.FBMResults.CI.method;
+            elseif obj.IsFBMComputed && (~isfield(obj.FBMResults, 'CI') || isempty(obj.FBMResults.CI))
+                cached_ci_method = 'none';
+            end
+            ci_match   = strcmpi(cached_ci_method, o.CIMethod);
+            frac_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'frac') && ...
+                         obj.FBMResults.frac == o.ExposureFraction;
+            lsub_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'subtrack_length') && ...
+                         obj.FBMResults.subtrack_length == o.SubtrackLength;
+            lmin_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'min_subtrack_length') && ...
+                         obj.FBMResults.min_subtrack_length == o.MinSubtrackLength;
+            mss_match  = obj.IsFBMComputed && isfield(obj.FBMResults, 'min_mean_sq_step') && ...
+                         obj.FBMResults.min_mean_sq_step == o.MinMeanSqStep;
+
+            if ~o.ForceRecompute && obj.IsFBMComputed && ~isSubset && ...
+               ci_match && frac_match && lsub_match && lmin_match && mss_match
                 results = obj.FBMResults;
                 return;
             end
@@ -822,17 +868,34 @@ classdef TrajectoryCollection < handle
                 return;
             end
 
+            % --- Immobility filter ----------------------------------------
+            if o.MinMeanSqStep > 0
+                n_before = numel(tracks);
+                tracks   = filter_mobile(tracks, o.MinMeanSqStep);
+                if isempty(tracks)
+                    error('getFBMParameters: no mobile tracks (MinMeanSqStep=%.4g).', o.MinMeanSqStep);
+                end
+                fprintf('getFBMParameters: removed %d immobile tracks (MinMeanSqStep=%.4g µm²), %d remain.\n', ...
+                        n_before - numel(tracks), o.MinMeanSqStep, numel(tracks));
+            end
+
             fprintf('getFBMParameters: %d %s tracks, dt=%.4f s, CIMethod=%s\n', ...
                 numel(tracks), trackType, dt, o.CIMethod);
 
-            results = fitFBM_MLE(tracks, dt, ...
+            [fp, ~, ci] = fitFBM_MLE(tracks, dt, ...
                 'ExposureFraction',  o.ExposureFraction, ...
                 'SubtrackLength',    o.SubtrackLength, ...
                 'MinSubtrackLength', o.MinSubtrackLength, ...
                 'CIMethod',          o.CIMethod, ...
                 'ProfilePoints',     o.ProfilePoints, ...
                 'MCMCSamples',       o.MCMCSamples);
-            results.track_type = trackType;
+            results                    = fp;
+            results.CI                 = ci;
+            results.track_type         = trackType;
+            results.frac               = o.ExposureFraction;
+            results.subtrack_length    = o.SubtrackLength;
+            results.min_subtrack_length = o.MinSubtrackLength;
+            results.min_mean_sq_step   = o.MinMeanSqStep;
 
             fprintf('  K=%.4g µm²/s^a  alpha=%.3f  sigma=%.3f µm  loglik=%.1f  (%d subtracks)\n', ...
                 results.K, results.alpha, results.sigma, results.loglik, results.n_subtracks);
@@ -902,6 +965,7 @@ classdef TrajectoryCollection < handle
             %     .track_type   string
             %     .n_removed    number of tracks removed by MinAlpha filter
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'TrackType',        'culled', @(x) ismember(lower(char(x)), {'culled','raw','relative'}));
             addParameter(p, 'Condition',        [],    @(x) ischar(x)||isstring(x)||iscell(x)||isempty(x));
@@ -1104,6 +1168,7 @@ classdef TrajectoryCollection < handle
             %     .pertracks    per-track struct (if PerTrack=true)
             %     .skipped      true if state was too small to fit
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'CIMethod',          'profile', @ischar);
             addParameter(p, 'SubtrackLength',    20,       @isnumeric);
@@ -1403,6 +1468,7 @@ classdef TrajectoryCollection < handle
                 error('plotMSD: run tc.getMSD() first.');
             end
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'Color',          [0 0.4 0.8], @isnumeric);
             addParameter(p, 'Title',          '',          @(x) ischar(x)||isstring(x));
@@ -1468,6 +1534,123 @@ classdef TrajectoryCollection < handle
             axis square; box off;
         end
 
+        function figs = plotFBMFit(obj, varargin)
+            % PLOTFBMFIT  Overlay the Toeplitz MLE fBM curve on the empirical
+            %             ensemble MSD.
+            %
+            %   figs = tc.plotFBMFit('FBMResults', fbm)   % pass result from getFBMParameters
+            %   figs = tc.plotFBMFit('Color', [0 0.4 0.8])
+            %   figs = tc.plotFBMFit('Title', 'H2B Control')
+            %   figs = tc.plotFBMFit('ShowBootstrap', true)
+            %
+            % Requires tc.getMSD() to have been run.  Pass 'FBMResults' explicitly
+            % when getFBMParameters was called with TrackType='relative' or a
+            % Condition filter (those results are not cached on the object):
+            %
+            %   fbm = tc.getFBMParameters('TrackType','relative', ...);
+            %   tc.plotFBMFit('FBMResults', fbm)
+            %
+            % The Toeplitz MLE curve uses the exact Backlund exposure-time kernel:
+            %   MSD_2d(n) = 4K * (psi(n*dt, Te, alpha) - psi(0, Te, alpha)) + 4*sigma^2
+
+            varargin = unpack_opts(varargin{:});
+            if ~obj.IsMSDComputed
+                error('plotFBMFit: run tc.getMSD() first.');
+            end
+
+            p = inputParser;
+            addParameter(p, 'FBMResults',    [],          @(x) isstruct(x)||isempty(x));
+            addParameter(p, 'Color',         [0 0.4 0.8], @isnumeric);
+            addParameter(p, 'Title',         '',          @(x) ischar(x)||isstring(x));
+            addParameter(p, 'ShowBootstrap', true,        @islogical);
+            parse(p, varargin{:});
+
+            % ── Resolve FBM results ───────────────────────────────────────────
+            fb = p.Results.FBMResults;
+            if isempty(fb)
+                if ~obj.IsFBMComputed
+                    error(['plotFBMFit: no FBM results available. Either run ' ...
+                           'tc.getFBMParameters() (for culled tracks) or pass ' ...
+                           '''FBMResults'' explicitly when using TrackType=''relative''.']);
+                end
+                fb = obj.FBMResults;
+            end
+
+            % ── MSD data ──────────────────────────────────────────────────────
+            r      = obj.MSDResults;
+            tau    = r.lag_axis;       % lag times in seconds
+            emsd   = r.ensemble_mean;
+            bmeans = r.boot_means;
+            bfits  = r.boot_fits;
+            dt     = r.dt;
+            frac   = r.frac;
+            lags   = r.lag_frames;     % integer frame lags (1, 2, …, MaxLag)
+            clr    = p.Results.Color;
+
+            ci_lo = prctile(bmeans, 2.5,  2);
+            ci_hi = prctile(bmeans, 97.5, 2);
+
+            % ── Toeplitz MLE parameters ───────────────────────────────────────
+            K     = fb.K;
+            alpha = fb.alpha;
+            sigma = fb.sigma;
+            % Use the ExposureFraction from the FBM fit, NOT the MSD frac.
+            if isfield(fb, 'frac')
+                Te = fb.frac * dt;
+            else
+                Te = frac * dt;
+            end
+
+            % Backlund psi function (exact exposure-time kernel)
+            psi = @(tau_s) ...
+                ((tau_s + Te).^(alpha+2) + abs(tau_s - Te).^(alpha+2) ...
+                 - 2*tau_s.^(alpha+2)) ./ (Te^2 * (alpha+1) * (alpha+2));
+
+            psi_0   = 2 * Te^alpha / ((alpha+1) * (alpha+2));
+            tau_s   = lags * dt;       % lag times in seconds (column vector)
+            msd_mle = 4*K * (psi(tau_s) - psi_0) + 4*sigma^2;
+
+            % ── Plot ──────────────────────────────────────────────────────────
+            figs = figure('Name', 'Ensemble MSD with Toeplitz MLE fit');
+
+            % Bootstrap CI shading (from MSD bootstrap)
+            patch([tau; flipud(tau)], [ci_lo; flipud(ci_hi)], clr, ...
+                  'EdgeColor', 'none', 'FaceAlpha', 0.25);
+            hold on;
+
+            % MSD least-squares fit curve (median over bootstrap, dashed)
+            if p.Results.ShowBootstrap
+                valid = bfits(~any(isnan(bfits), 2), :);
+                if ~isempty(valid)
+                    med_fp  = median(valid, 1);
+                    fit_crv = msd_model_curve(med_fp, lags, dt, frac);
+                    plot(tau, fit_crv, '--', 'Color', clr * 0.6, 'LineWidth', 1.5, ...
+                         'DisplayName', sprintf('MSD fit \\alpha=%.2f', med_fp(3)));
+                end
+            end
+
+            % Empirical ensemble mean
+            plot(tau, emsd, '-', 'Color', clr, 'LineWidth', 2.5, ...
+                 'DisplayName', 'Ensemble mean');
+
+            % Toeplitz MLE curve (black dashed)
+            plot(tau, msd_mle, 'k--', 'LineWidth', 2, ...
+                 'DisplayName', sprintf('Toeplitz MLE \\alpha=%.3f, K=%.4f, \\sigma=%.4f', ...
+                                        alpha, K, sigma));
+
+            set(gca, 'XScale', 'log', 'YScale', 'log', ...
+                     'FontSize', 18, 'FontWeight', 'bold', 'LineWidth', 1.5);
+            xlabel('\tau (s)');
+            ylabel('MSD (\mum^2)');
+            ttl = char(p.Results.Title);
+            if isempty(ttl)
+                ttl = sprintf('MSD + Toeplitz MLE  (n=%d tracks)', r.n_tracks);
+            end
+            title(ttl);
+            legend('Location', 'northwest', 'Box', 'off');
+            axis square; box off;
+        end
+
         function figs = plotRLDecomposition(obj, varargin)
             % PLOTRLDECOMPOSITION  Reproduce the standard RL analysis figures
             %                      from stored results without re-running RL_HILO.
@@ -1486,6 +1669,7 @@ classdef TrajectoryCollection < handle
                 error('plotRLDecomposition: run tc.getRLDecomposition() first.');
             end
 
+            varargin = unpack_opts(varargin{:});
             p = inputParser;
             addParameter(p, 'Title', '', @(x) ischar(x)||isstring(x));
             parse(p, varargin{:});
@@ -2039,6 +2223,28 @@ end
 % -------------------------------------------------------------------------
 function str = ifelse(cond, t, f)
     if cond, str = t; else, str = f; end
+end
+
+function varargin = unpack_opts(varargin)
+% UNPACK_OPTS  Allow methods to accept a struct in place of name-value pairs.
+%   If the first (and only) argument is a struct, expand it to name-value pairs.
+%   Usage: varargin = unpack_opts(varargin{:});
+if numel(varargin) == 1 && isstruct(varargin{1})
+    s = varargin{1};
+    f = fieldnames(s);
+    varargin = reshape([f'; struct2cell(s)'], 1, []);
+end
+end
+
+function tracks = filter_mobile(tracks, min_mean_sq_step)
+% FILTER_MOBILE  Remove tracks whose mean one-step squared displacement is
+%   below min_mean_sq_step (µm²).  Typical threshold: 4*sigma_fixed^2 where
+%   sigma_fixed is the localization precision measured from immobile particles.
+if min_mean_sq_step <= 0
+    return;
+end
+mobile = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= min_mean_sq_step, tracks);
+tracks = tracks(mobile);
 end
 
 function curve = msd_model_curve(fp, lags, dt, frac)

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Struct Options — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="fbm_analysis.html">fBM Analysis</a>
+  <a href="track_filtering.html">Track Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>Struct Options</h1>
+
+<p>
+Every analysis method in <code>TrajectoryCollection</code> accepts either the
+traditional MATLAB name-value syntax or a single <strong>options struct</strong>.
+The struct form lets you define parameters once, share them across conditions,
+and keep your scripts readable.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Syntax</h2>
+
+<p>Instead of:</p>
+<pre><code>tc.getFBMParameters('TrackType','relative', 'ExposureFraction',0.05, ...
+                    'SubtrackLength',40, 'MinSubtrackLength',40, ...
+                    'MinMeanSqStep',0.0064, 'CIMethod','profile+mcmc');</code></pre>
+
+<p>Write:</p>
+<pre><code>fbm_opts = struct( ...
+    'TrackType',          'relative',   ...
+    'ExposureFraction',    0.05,        ...
+    'SubtrackLength',      40,          ...
+    'MinSubtrackLength',   40,          ...
+    'MinMeanSqStep',       0.0064,      ...
+    'CIMethod',           'profile+mcmc');
+
+fbm = tc.getFBMParameters(fbm_opts);</code></pre>
+
+<div class="note">
+  <strong>Implementation:</strong> passing a single struct as the only argument
+  is internally equivalent to expanding it to name-value pairs. Any field name
+  that is not a recognised parameter will produce the same error as an
+  unrecognised name-value key.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Methods that accept a struct</h2>
+
+<table>
+  <thead><tr><th>Method</th></tr></thead>
+  <tbody>
+    <tr><td><code>getMSD</code> / <code>recomputeMSD</code></td></tr>
+    <tr><td><code>getFBMParameters</code></td></tr>
+    <tr><td><code>getFBMAlphaDistribution</code></td></tr>
+    <tr><td><code>getFBMByRLState</code></td></tr>
+    <tr><td><code>getRLDecomposition</code></td></tr>
+    <tr><td><code>getBayesianDiffusivity</code></td></tr>
+    <tr><td><code>getLifetime</code></td></tr>
+    <tr><td><code>plotMSD</code></td></tr>
+    <tr><td><code>plotFBMFit</code></td></tr>
+    <tr><td><code>plotRLDecomposition</code></td></tr>
+  </tbody>
+</table>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Sharing options across conditions</h2>
+
+<p>
+Define a base options struct, then create condition-specific variants by
+overwriting individual fields:
+</p>
+
+<pre><code>% ── Base options (shared physical parameters) ─────────────────────────
+sigma_fixed = 0.040;
+
+base_msd = struct( ...
+    'TrackType',     'relative',       ...
+    'MinLength',      40,              ...
+    'MinMeanSqStep',  4*sigma_fixed^2, ...
+    'MaxLag',         40,             ...
+    'NumBootstrap',   100,            ...
+    'ExposureTime',   0.01);
+
+base_fbm = struct( ...
+    'TrackType',          'relative',        ...
+    'ExposureFraction',    0.05,             ...
+    'SubtrackLength',      40,               ...
+    'MinSubtrackLength',   40,               ...
+    'MinMeanSqStep',       4*sigma_fixed^2,  ...
+    'CIMethod',           'profile+mcmc');
+
+% ── Condition A ────────────────────────────────────────────────────────
+opts_A      = base_msd;
+opts_A.Condition = 'Control';
+tc_A.recomputeMSD(opts_A);
+fbm_A = tc_A.getFBMParameters(setfield(base_fbm,'Condition','Control'));
+
+% ── Condition B (same parameters, different object) ────────────────────
+tc_B.recomputeMSD(base_msd);
+fbm_B = tc_B.getFBMParameters(base_fbm);</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Modifying a single field</h2>
+
+<p>
+Use <code>setfield</code> or direct assignment to create a modified copy
+without changing the original:
+</p>
+
+<pre><code>% Test with a stricter immobility threshold
+strict_opts       = base_fbm;
+strict_opts.MinMeanSqStep = 4 * 0.050^2;   % tighter threshold
+
+fbm_strict = tc.getFBMParameters(strict_opts);</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Saving and loading option sets</h2>
+
+<p>
+Structs can be saved to a <code>.mat</code> file alongside results for full
+reproducibility:
+</p>
+
+<pre><code>save('results/ER_100k_slow.mat', 'fbm', 'msd_results', 'base_fbm', 'base_msd');</code></pre>
+
+<footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
+</div>
+</body>
+</html>
