@@ -61,6 +61,8 @@ addParameter(p, 'SigmaFixed',        NaN,  @isnumeric);
 addParameter(p, 'MinTrackLength',     15,  @isnumeric);
 addParameter(p, 'MaxSubtrackLength',   0,  @isnumeric);
 addParameter(p, 'MinStepVar',          0,  @isnumeric);
+addParameter(p, 'MaxAlpha',          2,  @isnumeric);  % post-fit ceiling (default: no filter)
+addParameter(p, 'MaxFrameGap',       1,  @isnumeric);  % split tracks at gaps > this many missing frames
 addParameter(p, 'InitK',           1e-3,  @isnumeric);
 addParameter(p, 'InitAlpha',        0.8,  @isnumeric);
 addParameter(p, 'InitSigma',       0.05,  @isnumeric);
@@ -82,14 +84,17 @@ opts = optimoptions('fminunc', ...
     'StepTolerance',          1e-9, ...
     'Display',                'none');
 
-% Pre-filter tracks by length
-keep = cellfun(@(t) size(t,1) >= Lmin, tracks);
-tracks = tracks(keep);
+% Pre-filter tracks by length — keep original indices for back-mapping
+orig_idx = (1:numel(tracks))';
+keep     = cellfun(@(t) size(t,1) >= Lmin, tracks);
+tracks   = tracks(keep);
+orig_idx = orig_idx(keep);
 
 % Pre-filter by minimum step variance (removes essentially immobile particles)
 if o.MinStepVar > 0
-    keep2 = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= o.MinStepVar, tracks);
-    tracks = tracks(keep2);
+    keep2    = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= o.MinStepVar, tracks);
+    tracks   = tracks(keep2);
+    orig_idx = orig_idx(keep2);
 end
 
 N = numel(tracks);
@@ -173,17 +178,18 @@ for k = 1:N
     end
 end
 
-results.alpha        = alpha_out;
-results.K            = K_out;
-results.Ka           = Ka_out;
-results.sigma        = sigma_out;
-results.track_length = len_out;
-results.loglik       = ll_out;
-results.converged    = conv_out;
-results.sigma_fixed  = local_ifelse(fix_sig, o.SigmaFixed, NaN);
-results.dt           = dt;
-results.frac         = frac;
-results.n_tracks     = N;
+results.alpha          = alpha_out;
+results.K              = K_out;
+results.Ka             = Ka_out;
+results.sigma          = sigma_out;
+results.track_length   = len_out;
+results.loglik         = ll_out;
+results.converged      = conv_out;
+results.original_index = orig_idx;   % index into the input tracks cell array
+results.sigma_fixed    = local_ifelse(fix_sig, o.SigmaFixed, NaN);
+results.dt             = dt;
+results.frac           = frac;
+results.n_tracks       = N;
 
 if o.Verbose
     fprintf('fitFBM_pertracks: done. median alpha=%.3f, median K=%.4g\n', ...
@@ -269,4 +275,35 @@ end
 
 function s = local_ifelse(cond, t, f)
 if cond; s = t; else; s = f; end
+end
+
+
+function out = split_tracks_at_gaps(tracks)
+%SPLIT_TRACKS_AT_GAPS  Break each track into gap-free segments.
+%
+%   Culled tracks carry frame numbers in column 3.  Whenever two
+%   consecutive rows have non-consecutive frame numbers (diff > 1),
+%   a gap exists and the track is split at that point.  Each resulting
+%   segment is a contiguous run of 1-frame-apart localizations, so
+%   diff() on x or y produces true single-frame displacements.
+%
+%   Tracks without a frame column (< 3 columns) are passed through unchanged.
+out = cell(0, 1);
+for k = 1:numel(tracks)
+    tr = tracks{k};
+    if size(tr, 2) < 3
+        out{end+1, 1} = tr;
+        continue;
+    end
+    f    = tr(:, 3);
+    gaps = find(diff(f) > 1);   % row indices where a gap follows
+    if isempty(gaps)
+        out{end+1, 1} = tr;
+    else
+        cuts = [0; gaps; size(tr, 1)];
+        for s = 1:numel(cuts) - 1
+            out{end+1, 1} = tr(cuts(s)+1 : cuts(s+1), :); %#ok<AGROW>
+        end
+    end
+end
 end

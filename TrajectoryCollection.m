@@ -1105,17 +1105,20 @@ classdef TrajectoryCollection < handle
                     continue;
                 end
 
-                dr = sqrt(dr2);
-                dr_norm = dr - mean(dr);   % mean-centred steps for ACF
-
-                % Accumulate lag-k correlations (normalized by lag-0 variance)
-                v0 = mean(dr_norm.^2);
+                % Use vector components (x and y separately), averaged.
+                % Step-magnitude DACF loses sign information and gives near-zero
+                % values even for strongly subdiffusive fBM.  Vector-component
+                % DACF recovers the correct (2^alpha-2)/2 at lag 1.
+                dx = diff(tr(:, 1));
+                dy = diff(tr(:, 2));
+                v0 = (mean(dx.^2) + mean(dy.^2)) / 2;   % per-component variance
                 if v0 < eps
                     n_skip = n_skip + 1;
                     continue;
                 end
                 for lag = 1:maxlag
-                    xc = mean(dr_norm(1:end-lag) .* dr_norm(1+lag:end));
+                    xc = (mean(dx(1:end-lag) .* dx(1+lag:end)) + ...
+                          mean(dy(1:end-lag) .* dy(1+lag:end))) / 2;
                     num(lag) = num(lag) + xc / v0;
                 end
                 den    = den + 1;
@@ -1134,7 +1137,7 @@ classdef TrajectoryCollection < handle
 
             fprintf('computeDACF: %d tracks used, %d skipped (MinStepVar filter)\n', ...
                 n_used, n_skip);
-            fprintf('  DACF(1) = %.4f  (theoretical for pure fBM: (2^alpha-2)/2)\n', dacf(1));
+            fprintf('  DACF(1) = %.4f  (theoretical for pure fBM: (2^alpha - 2)/2; e.g. -0.34 at alpha=0.4)\n', dacf(1));
         end
 
         %% Per-RL-state fBM fitting
@@ -1265,7 +1268,7 @@ classdef TrajectoryCollection < handle
                         'Verbose',           o.Verbose);
                     if o.MinAlpha > 0
                         keep_a = pt.alpha >= o.MinAlpha;
-                        fields = {'alpha','K','Ka','sigma','track_length','loglik','converged'};
+                        fields = {'alpha','K','Ka','sigma','track_length','loglik','converged','original_index'};
                         for fi = 1:numel(fields)
                             if isfield(pt, fields{fi})
                                 pt.(fields{fi}) = pt.(fields{fi})(keep_a);
