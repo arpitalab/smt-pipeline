@@ -11,12 +11,17 @@ function results = computePackingFraction(tracks, varargin)
 %   over sliding windows of WindowSize frames, then takes the median across
 %   windows as the per-track aggregate value.
 %
-%   Interpretation:
-%     High pc  —  elongated / directed tracks (large total path, small convex
-%                 hull area): consistent with 1D sliding or loop extrusion.
-%     Low  pc  —  compact / confined tracks (trajectory fills a roughly circular
-%                 domain relative to its step size): consistent with subdiffusion
-%                 within a chromatin domain.
+%   Interpretation (Renner et al. Biophys J 2017):
+%     Pc scales inversely with the confinement area.  Three regimes:
+%
+%     High pc  —  (1) CONFINED motion: steps and hull area both small,
+%                     but hull area² shrinks faster → high Pc.
+%                 (2) DIRECTED / sliding motion: steps large, hull area
+%                     nearly collinear (→ 0) → Pc highest of all.
+%     Low  pc  —  FREE diffusion: hull grows unboundedly → large S² → low Pc.
+%
+%     To distinguish confinement from directed motion, combine Pc with
+%     the hull aspect ratio or straightness index.
 %
 %   Inputs:
 %     tracks  - cell array of N x 2 (or N x 3) trajectory matrices (µm).
