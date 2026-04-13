@@ -84,9 +84,14 @@ for pp = 1:2
     hold on;
 
     for c = [c1, c2]
-        if ~tcs{c}.IsMSDComputed, continue; end
+        if ~isfield(tcs{c}.MSDResults,'ensemble_mean') || isempty(tcs{c}.MSDResults.ensemble_mean), continue; end
         msd  = tcs{c}.MSDResults;
-        lags = msd.lag_axis;
+        % lag_axis may be absent in older cached results — reconstruct from lag_frames
+        if isfield(msd, 'lag_axis') && ~isempty(msd.lag_axis)
+            lags = msd.lag_axis;
+        else
+            lags = msd.lag_frames * msd.dt;
+        end
         y    = msd.ensemble_mean;
 
         % Empirical MSD
@@ -128,7 +133,7 @@ xtick_pos = [];
 xtick_lbl = {};
 
 for c = 1:n_cond
-    for s = 1:numel(fbm_states{c})
+    for s = 1:2
         st = fbm_states{c}(s);
         if st.skipped, continue; end
         x_pos = x_pos + 1;
@@ -178,63 +183,90 @@ for c = 1:n_cond
 end
 legend(ax1, 'Location', 'best', 'Box', 'off');
 
+edges = linspace(-2, 4, 40);   % log10(pc) edges
+xf    = linspace(min(edges), max(edges), 200);
+
+%% =============================================================================
+%  FIGURE 3a — pc histograms: stiffness comparison within protein
+%              rows = states 1 & 2,  cols = H2B | ER
 % =============================================================================
-%  FIGURE 3 — Packing fraction histograms per RL state
-% =============================================================================
-% Determine grid: rows = RL states, cols = proteins (H2B | ER)
-n_states_h2b = numel(pf{1});   % assume same for 1k and 100k
-n_states_er  = numel(pf{3});
-n_rows       = max(n_states_h2b, n_states_er);
+figure('Name', 'PC: stiffness comparison', 'Position', [100 50 1100 700]);
 
-figure('Name', 'Packing fraction per RL state', 'Position', [100 50 1100 350*n_rows]);
-
-edges = linspace(-4, 2, 40);   % log10(pc) edges
-
-for s = 1:n_rows
-    % H2B column
-    ax = subplot(n_rows, 2, (s-1)*2 + 1);
-    hold on;
-    for c = 1:2   % H2B conditions
+for s = 1:2
+    % H2B: 1kPa vs 100kPa
+    subplot(2, 2, (s-1)*2 + 1);  hold on;
+    for c = 1:2
         if s > numel(pf{c}), continue; end
-        v = log10(pf{c}{s}.pc);
-        v = v(isfinite(v));
-        histogram(v, edges, 'Normalization', 'pdf', ...
-            'FaceColor', clrs{c}, 'FaceAlpha', 0.5, 'EdgeColor', 'none', ...
-            'DisplayName', labels{c});
-        % Gaussian fit
-        [mu, sg] = normfit(v);
-        xf = linspace(min(edges), max(edges), 200);
-        plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.5, ...
-            'HandleVisibility', 'off');
-    end
-    xlabel('log_{10}(packing fraction)'); ylabel('PDF');
-    title(sprintf('H2B — RL state %d', s));
-    legend('Box', 'off', 'Location', 'best');
-    box off;
-
-    % ER column
-    ax = subplot(n_rows, 2, (s-1)*2 + 2); %#ok<NASGU>
-    hold on;
-    for c = 3:4   % ER conditions
-        if s > numel(pf{c}), continue; end
-        v = log10(pf{c}{s}.pc);
-        v = v(isfinite(v));
+        v = log10(pf{c}{s}.pc);  v = v(isfinite(v));
         histogram(v, edges, 'Normalization', 'pdf', ...
             'FaceColor', clrs{c}, 'FaceAlpha', 0.5, 'EdgeColor', 'none', ...
             'DisplayName', labels{c});
         [mu, sg] = normfit(v);
-        xf = linspace(min(edges), max(edges), 200);
-        plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.5, ...
+        plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.8, ...
             'HandleVisibility', 'off');
     end
     xlabel('log_{10}(packing fraction)'); ylabel('PDF');
-    title(sprintf('ER — RL state %d', s));
-    legend('Box', 'off', 'Location', 'best');
-    box off;
+    title(sprintf('H2B — state %d  (1 kPa vs 100 kPa)', s));
+    legend('Box', 'off', 'Location', 'best');  box off;
+
+    % ER: 1kPa vs 100kPa
+    subplot(2, 2, (s-1)*2 + 2);  hold on;
+    for c = 3:4
+        if s > numel(pf{c}), continue; end
+        v = log10(pf{c}{s}.pc);  v = v(isfinite(v));
+        histogram(v, edges, 'Normalization', 'pdf', ...
+            'FaceColor', clrs{c}, 'FaceAlpha', 0.5, 'EdgeColor', 'none', ...
+            'DisplayName', labels{c});
+        [mu, sg] = normfit(v);
+        plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.8, ...
+            'HandleVisibility', 'off');
+    end
+    xlabel('log_{10}(packing fraction)'); ylabel('PDF');
+    title(sprintf('ER — state %d  (1 kPa vs 100 kPa)', s));
+    legend('Box', 'off', 'Location', 'best');  box off;
 end
-sgtitle('Packing fraction distributions (lines = Gaussian fit in log space)', 'FontSize', 13);
+sgtitle('Packing fraction: stiffness effect within protein', 'FontSize', 13);
 
+%% =============================================================================
+%  FIGURE 3b — pc histograms: H2B vs ER at same stiffness
+%              rows = states 1 & 2,  cols = 1 kPa | 100 kPa
 % =============================================================================
+% Map: condition index → stiffness label and H2B/ER pairing
+% H2B_1k=1, H2B_100k=2, ER_1k=3, ER_100k=4
+stiff_pairs  = {[1 3], [2 4]};          % {1kPa pair, 100kPa pair}
+stiff_labels = {'1 kPa', '100 kPa'};
+
+figure('Name', 'PC: H2B vs ER', 'Position', [150 100 1100 700]);
+
+for s = 1:2
+    for sp = 1:2
+        c_h2b = stiff_pairs{sp}(1);
+        c_er  = stiff_pairs{sp}(2);
+
+        subplot(2, 2, (s-1)*2 + sp);  hold on;
+
+        pair_idx  = [c_h2b, c_er];
+        pair_lbls = {'H2B', 'ER'};
+        for pi = 1:2
+            c   = pair_idx(pi);
+            lbl = pair_lbls{pi};
+            if s > numel(pf{c}), continue; end
+            v = log10(pf{c}{s}.pc);  v = v(isfinite(v));
+            histogram(v, edges, 'Normalization', 'pdf', ...
+                'FaceColor', clrs{c}, 'FaceAlpha', 0.5, 'EdgeColor', 'none', ...
+                'DisplayName', lbl);
+            [mu, sg] = normfit(v);
+            plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.8, ...
+                'HandleVisibility', 'off');
+        end
+        xlabel('log_{10}(packing fraction)'); ylabel('PDF');
+        title(sprintf('%s — state %d', stiff_labels{sp}, s));
+        legend('Box', 'off', 'Location', 'best');  box off;
+    end
+end
+sgtitle('Packing fraction: H2B vs ER at same stiffness', 'FontSize', 13);
+
+%% =============================================================================
 %  FIGURE 4 — DACF with noise-corrected theory
 % =============================================================================
 figure('Name', 'DACF', 'Position', [150 150 600 420]);
