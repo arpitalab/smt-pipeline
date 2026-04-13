@@ -17,8 +17,9 @@ dt          = 0.2;          % s (frame interval)
 sigma_fixed = 0.040;        % µm (localization precision)
 thresh      = 4*sigma_fixed^2;
 frac        = 0.05;         % ExposureFraction (Te/dt)
-W_pc        = 80;           % packing fraction window (frames)
+W_pc        = 20;           % packing fraction window (frames)
 maxlag_dacf = 10;           % lags for DACF
+dt          = 0.2;
 
 % ── Collections ───────────────────────────────────────────────────────────────
 tcs    = {H2B_1k_E2,     H2B_100k_E2,     ER_1k_slow,      ER_100k_slow};
@@ -39,7 +40,7 @@ for c = 1:n_cond
         'Verbose',        false);
 end
 
-% ── 2. Packing fraction per RL state ─────────────────────────────────────────
+%% ── 2. Packing fraction per RL state ─────────────────────────────────────────
 fprintf('=== computePackingFraction ===\n');
 pf = cell(n_cond, 1);
 for c = 1:n_cond
@@ -59,7 +60,7 @@ for c = 1:n_cond
     end
 end
 
-% ── 3. DACF ───────────────────────────────────────────────────────────────────
+%% ── 3. DACF ───────────────────────────────────────────────────────────────────
 fprintf('=== computeDACF ===\n');
 dacf_vals = cell(n_cond, 1);
 for c = 1:n_cond
@@ -117,7 +118,7 @@ for pp = 1:2
 end
 sgtitle('MSD: dashed = fBM model (median bootstrap fit)', 'FontSize', 13);
 
-% =============================================================================
+%% =============================================================================
 %  FIGURE 2 — fBM alpha and Ka per RL state
 % =============================================================================
 figure('Name', 'fBM parameters per RL state', 'Position', [50 100 1200 500]);
@@ -183,7 +184,7 @@ for c = 1:n_cond
 end
 legend(ax1, 'Location', 'best', 'Box', 'off');
 
-edges = linspace(-2, 4, 40);   % log10(pc) edges
+edges = linspace(1, 4, 40);   % log10(pc) edges
 xf    = linspace(min(edges), max(edges), 200);
 
 %% =============================================================================
@@ -238,13 +239,17 @@ stiff_labels = {'1 kPa', '100 kPa'};
 
 figure('Name', 'PC: H2B vs ER', 'Position', [150 100 1100 700]);
 
+% Pre-collect stats for summary table
+stat_rows = {};
+
 for s = 1:2
     for sp = 1:2
         c_h2b = stiff_pairs{sp}(1);
         c_er  = stiff_pairs{sp}(2);
 
-        subplot(2, 2, (s-1)*2 + sp);  hold on;
+        ax = subplot(2, 2, (s-1)*2 + sp);  hold on;
 
+        v_h2b = []; v_er = [];
         pair_idx  = [c_h2b, c_er];
         pair_lbls = {'H2B', 'ER'};
         for pi = 1:2
@@ -252,19 +257,56 @@ for s = 1:2
             lbl = pair_lbls{pi};
             if s > numel(pf{c}), continue; end
             v = log10(pf{c}{s}.pc);  v = v(isfinite(v));
+            if pi == 1, v_h2b = v; else, v_er = v; end
             histogram(v, edges, 'Normalization', 'pdf', ...
                 'FaceColor', clrs{c}, 'FaceAlpha', 0.5, 'EdgeColor', 'none', ...
-                'DisplayName', lbl);
+                'DisplayName', sprintf('%s (n=%d)', lbl, numel(v)));
             [mu, sg] = normfit(v);
             plot(xf, normpdf(xf, mu, sg), '-', 'Color', clrs{c}, 'LineWidth', 1.8, ...
                 'HandleVisibility', 'off');
         end
+
+        % Two-sample t-test and effect size on log10(pc)
+        if ~isempty(v_h2b) && ~isempty(v_er)
+            [~, p_t, ~, stats_t] = ttest2(v_h2b, v_er);
+            % Cohen's d
+            n1 = numel(v_h2b); n2 = numel(v_er);
+            sp_pool = sqrt(((n1-1)*var(v_h2b) + (n2-1)*var(v_er)) / (n1+n2-2));
+            d = (mean(v_h2b) - mean(v_er)) / sp_pool;
+            % KS test (non-parametric check)
+            [~, p_ks] = kstest2(v_h2b, v_er);
+
+            % Annotate plot
+            p_str = local_pstr(p_t);
+            text(ax, 0.05, 0.95, ...
+                sprintf('t-test: %s\nd = %.2f\nKS: %s', p_str, d, local_pstr(p_ks)), ...
+                'Units', 'normalized', 'VerticalAlignment', 'top', ...
+                'FontSize', 9, 'Color', [0.2 0.2 0.2]);
+
+            stat_rows{end+1} = {stiff_labels{sp}, s, ...
+                mean(v_h2b), std(v_h2b), mean(v_er), std(v_er), ...
+                p_t, d, p_ks}; %#ok<AGROW>
+        end
+
         xlabel('log_{10}(packing fraction)'); ylabel('PDF');
         title(sprintf('%s — state %d', stiff_labels{sp}, s));
         legend('Box', 'off', 'Location', 'best');  box off;
     end
 end
 sgtitle('Packing fraction: H2B vs ER at same stiffness', 'FontSize', 13);
+
+% Print statistical summary
+fprintf('\n%s\n', repmat('=', 1, 95));
+fprintf('%-10s  %-6s  %-18s  %-18s  %-10s  %-8s  %-10s\n', ...
+    'Stiffness', 'State', 'H2B log10(pc)', 'ER log10(pc)', 't-test p', "Cohen's d", 'KS p');
+fprintf('%s\n', repmat('-', 1, 95));
+for r = 1:numel(stat_rows)
+    row = stat_rows{r};
+    fprintf('%-10s  %-6d  %.3f ± %.3f       %.3f ± %.3f       %-10s  %-8.2f  %-10s\n', ...
+        row{1}, row{2}, row{3}, row{4}, row{5}, row{6}, ...
+        local_pstr(row{7}), row{8}, local_pstr(row{9}));
+end
+fprintf('%s\n', repmat('=', 1, 95));
 
 %% =============================================================================
 %  FIGURE 4 — DACF with noise-corrected theory
@@ -293,7 +335,7 @@ legend('Box', 'off', 'Location', 'best');
 title('DACF: dashed = noise-corrected fBM theory');
 box off;
 
-% =============================================================================
+%% =============================================================================
 %  SUMMARY TABLE
 % =============================================================================
 fprintf('\n%s\n', repmat('=',1,80));
@@ -310,9 +352,19 @@ for c = 1:n_cond
 end
 fprintf('%s\n', repmat('=',1,80));
 
-% =============================================================================
+%% =============================================================================
 %  Local functions
 % =============================================================================
+
+function s = local_pstr(p)
+% Format p-value as significance stars + numeric string.
+if p < 0.001,     s = sprintf('***  p=%.2e', p);
+elseif p < 0.01,  s = sprintf('**   p=%.4f', p);
+elseif p < 0.05,  s = sprintf('*    p=%.4f', p);
+else,             s = sprintf('ns   p=%.3f', p);
+end
+end
+
 
 function curve = local_msd_model(fp, lag_frames, dt, frac)
 % Reconstruct fBM MSD model from boot_fits parameters [G, sigma_sq, alpha].
