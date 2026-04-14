@@ -267,6 +267,8 @@ classdef TrajectoryCollection < handle
             %     'MinGroupSize'     - minimum tracks per state to run fBM fit (default: 50)
             %     'SubtrackLength'   - subtrack length for per-state fBM MLE (default: 20)
             %     'CIMethod'         - CI method for per-state fBM MLE (default: 'none')
+            %     'SigmaLoc'         - localization precision (µm) for RL PSF noise
+            %                          correction; 0 = no correction (default: 0)
             %     'ForceRecompute'   - logical; default false
 
             varargin = unpack_opts(varargin{:});
@@ -281,6 +283,7 @@ classdef TrajectoryCollection < handle
             addParameter(p, 'MinGroupSize',      50,              @isnumeric);
             addParameter(p, 'SubtrackLength',    20,              @isnumeric);
             addParameter(p, 'CIMethod',          'none',          @ischar);
+            addParameter(p, 'SigmaLoc',          0,               @isnumeric);
             addParameter(p, 'ForceRecompute',    false,           @islogical);
             parse(p, varargin{:});
             o = p.Results;
@@ -363,7 +366,8 @@ classdef TrajectoryCollection < handle
                 'ExposureFraction', o.ExposureFraction, ...
                 'MinGroupSize',     o.MinGroupSize, ...
                 'SubtrackLength',   o.SubtrackLength, ...
-                'CIMethod',         o.CIMethod);
+                'CIMethod',         o.CIMethod, ...
+                'SigmaLoc',         o.SigmaLoc);
 
             obj.RLResults.M                   = M;
             obj.RLResults.computed_quantities = computed_quantities;
