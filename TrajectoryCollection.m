@@ -1714,17 +1714,42 @@ classdef TrajectoryCollection < handle
             title(ttl);
             box off;
 
-            % --- Fig 3: per-state ensemble MSD -------------------------------
+            % --- Fig 3: per-state ensemble MSD with Toeplitz MLE curves --------
             figs(3) = figure('Name', 'Per-state MSD');
             hold on;
+
+            % Backlund psi kernel (reused per state)
+            psi_fn = @(tau_s, Te, alpha) ...
+                ((tau_s + Te).^(alpha+2) + abs(tau_s - Te).^(alpha+2) ...
+                 - 2*tau_s.^(alpha+2)) ./ (Te^2 * (alpha+1) * (alpha+2));
+
+            frac = obj.RLResults.frac;
+
             for s = 1:n_states
                 n_s = numel(cq.classified_tracks{s});
                 if n_s == 0, continue; end
-                errorbar(tau_rl, cq.msd(:, s), cq.msderr(:, s), ...
-                         '-o', 'Color', colors(s, :), 'LineWidth', 1.5, ...
+
+                % Empirical MSD with error bars
+                h = errorbar(tau_rl, cq.msd(:, s), cq.msderr(:, s), ...
+                         'o', 'Color', colors(s, :), 'LineWidth', 1.5, ...
                          'MarkerSize', 4, 'CapSize', 3, ...
                          'DisplayName', sprintf('State %d  (n=%d)', s, n_s));
+
+                % Toeplitz MLE curve (dashed, same colour)
+                fb = cq.fbm(s);
+                if isfield(fb, 'converged') && fb.converged
+                    Te      = frac * dt;
+                    psi_0   = 2 * Te^fb.alpha / ((fb.alpha+1) * (fb.alpha+2));
+                    msd_mle = 4*fb.K * (psi_fn(tau_rl, Te, fb.alpha) - psi_0) + 4*fb.sigma^2;
+                    plot(tau_rl, msd_mle, '--', 'Color', colors(s, :), 'LineWidth', 2, ...
+                         'HandleVisibility', 'off');
+                    % Annotate with α on the last point
+                    text(tau_rl(end)*1.05, msd_mle(end), ...
+                         sprintf('\\alpha=%.2f', fb.alpha), ...
+                         'Color', colors(s, :), 'FontSize', 12, 'FontWeight', 'bold');
+                end
             end
+
             set(gca, 'XScale', 'log', 'YScale', 'log', ...
                      'FontSize', 18, 'FontWeight', 'bold', 'LineWidth', 1.5);
             xlabel('\tau (s)');
