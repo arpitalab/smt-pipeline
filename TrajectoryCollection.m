@@ -1,4 +1,4 @@
-classdef TrajectoryCollection < handle
+classdef TrajectoryCollection < matlab.mixin.Copyable
     % TRAJECTORYCOLLECTION - Aggregates multiple TrajectoryWrapper instances for
     %                        multi-file / multi-condition SMT analysis.
     %
