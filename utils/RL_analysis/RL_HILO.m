@@ -18,6 +18,9 @@ function [M, bins, computed_quantities] = RL_HILO(tracks, title_str, lagtime, va
 %     'MinGroupSize'     - Minimum tracks in a state to fit fBM (default: 50).
 %     'SubtrackLength'   - Subtrack length for population fBM MLE (default: 20).
 %     'CIMethod'         - CI method for fitFBM_MLE (default: 'none').
+%     'SigmaLoc'         - Localization precision (µm) for RL PSF correction
+%                          (default: 0). When >0, RL_psd_tmp uses M_eff = M + 4*sigma²
+%                          so that recovered P(M) represents the TRUE MSD distribution.
 %
 %   Outputs:
 %     M                   - Vector of MSD values (RL deconvolution result)
@@ -47,6 +50,7 @@ addParameter(p, 'MaxLag',           25,       @isnumeric);
 addParameter(p, 'MinGroupSize',     50,       @isnumeric);
 addParameter(p, 'SubtrackLength',   20,       @isnumeric);
 addParameter(p, 'CIMethod',         'none',   @ischar);
+addParameter(p, 'SigmaLoc',         0,        @isnumeric);
 parse(p, varargin{:});
 o = p.Results;
 
@@ -54,11 +58,12 @@ dt      = o.dt;
 frac    = o.ExposureFraction;
 max_lag = round(o.MaxLag);
 
-fprintf('RL_HILO: dt=%.4f s, ExposureFraction=%.3f\n', dt, frac);
+sigma_loc = o.SigmaLoc;
+fprintf('RL_HILO: dt=%.4f s, ExposureFraction=%.3f, SigmaLoc=%.4f µm\n', dt, frac, sigma_loc);
 
 % --- Van Hove and RL deconvolution ---
 [~, vanHove, bins] = calc_vanHove(tracks, lagtime, 1);
-[M, Gs, P1norm, ~] = RL_psd_tmp(bins, vanHove, 50000);
+[M, Gs, P1norm, ~] = RL_psd_tmp(bins, vanHove, 50000, sigma_loc);
 
 figure;
 plot(bins, vanHove, 'ko', 'markersize', 8);

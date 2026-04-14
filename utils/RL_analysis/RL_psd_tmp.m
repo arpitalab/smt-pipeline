@@ -1,24 +1,29 @@
-function [M,Gs,P1norm,psf] = RL_psd_tmp(bins,vanHove,Niter)
+function [M,Gs,P1norm,psf] = RL_psd_tmp(bins,vanHove,Niter,sigma_loc)
 % Richardson-Lucy algorithm to extract P(D) from G(r,t)
 % see Ashwin et al. PNAS
 % Given a van Hove correlation function, this routine uses the RL algorithm
 % to calculate the underlying distribution of MSDs that gave rise to the vH
 % function, with the assumption of Gaussian distributed jumps for a given M
 % $G(r,t) = \int dM P(M) A exp(-r^2/M)$
-% Input: 
+% Input:
 %       bins: points at which vanHove correlation is calculated
 %       vanHove: vanHove distribution
 %       Niter: number of iterations for RL algorithm
+%       sigma_loc: (optional) localization precision (µm). When provided,
+%                  the PSF kernel is corrected for localization noise:
+%                  the observed MSD = true MSD + 4*sigma_loc^2, so the
+%                  kernel uses M_eff = M + 4*sigma_loc^2 and the recovered
+%                  P(M) represents the TRUE MSD distribution.
+%                  Default: 0 (no correction).
 % Output:
-%       M: values over which empirical MSDs are estimated
+%       M: values over which empirical MSDs are estimated (TRUE MSDs)
 %       Gs: estimated van Hove correlation
 %       P1norm: P(M), probability distribution of MSDs
-% A test case is the empirical distribution of 2 Gaussians 
-% Memp=logspace(log10(1e-3),log10(2e-1),200);
-% PM=30*exp(-(M-5e-3).^2/(2*1e-6))+10*exp(-(M-5e-2).^2/(2*1e-4));
-% which can be used to forward calculate G(r,t) using the point-spread
-% function below. Then RL can be applied to recover this "unknown" G(r,t) as
-% below.
+
+if nargin < 4 || isempty(sigma_loc)
+    sigma_loc = 0;
+end
+noise_var = 4 * sigma_loc^2;   % localization noise contribution to observed MSD
 
 if(size(bins,1)==1)
     x=bins';
@@ -28,13 +33,14 @@ end
 if(size(vanHove,1)==1)
     vanHove = vanHove';
 end
-M = logspace(log10(1e-3),log10(1),100); % allocate the grid for MSD calculation
+M = logspace(log10(1e-3),log10(1),100); % allocate the grid for MSD calculation (TRUE MSDs)
 lM = length(M);
 lx = length(x);
 psf = zeros(lx,lM);
 for ii=1:lM
-    psf(:,ii) = exp(-(x).^2/(M(ii))); %Gaussian "PSF"
-    psf(:,ii) = psf(:,ii)/(pi*M(ii)); % normalize PSF
+    M_eff = M(ii) + noise_var;    % observed MSD = true MSD + localization noise
+    psf(:,ii) = exp(-(x).^2/M_eff); %Gaussian "PSF" with noise correction
+    psf(:,ii) = psf(:,ii)/(pi*M_eff); % normalize PSF
 end
 
 P1=exp(-(M)/1e-3); % initial guess. changing the denominator by 2 OoM doesn't make a difference
