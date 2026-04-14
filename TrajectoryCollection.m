@@ -1737,7 +1737,7 @@ classdef TrajectoryCollection < handle
 
                 % Toeplitz MLE curve (dashed, same colour)
                 fb = cq.fbm(s);
-                if isfield(fb, 'converged') && fb.converged
+                if isfield(fb, 'converged') && isscalar(fb.converged) && fb.converged
                     Te      = frac * dt;
                     psi_0   = 2 * Te^fb.alpha / ((fb.alpha+1) * (fb.alpha+2));
                     msd_mle = 4*fb.K * (psi_fn(tau_rl, Te, fb.alpha) - psi_0) + 4*fb.sigma^2;
