@@ -1287,6 +1287,240 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             end
         end
 
+        %% fBM by pEM state
+        function results = getFBMByPEMState(obj, varargin)
+            % GETFBMBYPEMSTATE  Assign whole tracks to pEM states, then fit fBM per state.
+            %
+            %   results = tc.getFBMByPEMState()
+            %   results = tc.getFBMByPEMState('MinPP', 0.5, 'DeltaPP', 0.2, ...
+            %       'Purity', 0.8, 'CIMethod', 'profile', 'PerTrack', true)
+            %
+            %   Maps pEM subtrack-level state assignments back to parent tracks.
+            %   A subtrack is "confident" if its maximum posterior probability
+            %   exceeds MinPP AND the gap between the top two posteriors exceeds
+            %   DeltaPP.  A parent track is assigned to a state if the fraction
+            %   of its confident subtracks in the majority state exceeds Purity.
+            %   Population and (optional) per-track fBM MLE is then run on each
+            %   state group using the full-length parent tracks.
+            %
+            %   Requires getBayesianDiffusivity() to have been run first.
+            %
+            %   Options:
+            %     'MinPP'          - minimum max-posterior for a subtrack to be
+            %                        considered confident (default: 0.5)
+            %     'DeltaPP'        - minimum gap between top two posteriors
+            %                        (default: 0.0 — set to 0.2 for strict
+            %                        classification as in Wagh et al. Sci Adv 2023)
+            %     'Purity'         - fraction of confident subtracks that must
+            %                        agree on the majority state for the parent
+            %                        track to be assigned (default: 0.8)
+            %     'MinSubtracks'   - minimum number of confident subtracks in a
+            %                        parent track (default: 1)
+            %     'MinTrackLength' - minimum length (frames) for fBM fitting
+            %                        (default: 20)
+            %     'MinGroupSize'   - minimum tracks per state for fBM (default: 50)
+            %     'SubtrackLength' - fBM MLE subtrack length (default: 20)
+            %     'CIMethod'       - CI method for fitFBM_MLE (default: 'profile')
+            %     'PerTrack'       - also run fitFBM_pertracks (default: false)
+            %     'MinAlpha'       - post-fit α floor for per-track results (default: 0)
+            %     'MaxSubtrackLength' - for fitFBM_pertracks (default: 20)
+            %     'Verbose'        - print progress (default: true)
+
+            varargin = unpack_opts(varargin{:});
+            p = inputParser;
+            addParameter(p, 'MinPP',             0.5,       @isnumeric);
+            addParameter(p, 'DeltaPP',           0.0,       @isnumeric);
+            addParameter(p, 'Purity',            0.8,       @isnumeric);
+            addParameter(p, 'MinSubtracks',      1,         @isnumeric);
+            addParameter(p, 'MinTrackLength',    20,        @isnumeric);
+            addParameter(p, 'MinGroupSize',      50,        @isnumeric);
+            addParameter(p, 'SubtrackLength',    20,        @isnumeric);
+            addParameter(p, 'CIMethod',          'profile', @ischar);
+            addParameter(p, 'PerTrack',          false,     @islogical);
+            addParameter(p, 'MinAlpha',          0,         @isnumeric);
+            addParameter(p, 'MaxSubtrackLength', 20,        @isnumeric);
+            addParameter(p, 'MinStepVar',        0,         @isnumeric);
+            addParameter(p, 'Verbose',           true,      @islogical);
+            parse(p, varargin{:});
+            o = p.Results;
+
+            if ~obj.IspEMComputed
+                error('getFBMByPEMState: run tc.getBayesianDiffusivity() first.');
+            end
+
+            pt       = obj.pEMResults.pEMTable;
+            pp       = pt.posteriorProb{1};      % nSubtracks x nStates
+            splitIdx = pt.splitID{1};             % nSubtracks x 1 → parent index in X
+            n_states = pt.optimalSize;
+            dt       = pt.trackInfo{1}.dt;
+
+            % --- Confident subtrack selection --------------------------------
+            [max_pp, map_state] = max(pp, [], 2);
+            sort_pp  = sort(pp, 2, 'descend');
+            delta_pp = sort_pp(:, 1) - sort_pp(:, 2);
+
+            confident = max_pp >= o.MinPP & delta_pp >= o.DeltaPP;
+            n_total   = numel(map_state);
+            n_conf    = sum(confident);
+            fprintf('getFBMByPEMState: %d / %d subtracks pass MinPP=%.2f, DeltaPP=%.2f\n', ...
+                n_conf, n_total, o.MinPP, o.DeltaPP);
+
+            % --- Map subtracks → parent tracks --------------------------------
+            % splitIdx(j) = parent track index in X (the length-filtered array).
+            % Reconstruct X to get the full-length parent tracks for fBM.
+            all_tracks = obj.getAllCulledTracks();
+            splitLen_pem = obj.pEMResults.pEMTable.trackInfo{1}.splitLength;
+            % Rebuild X index map: X{k} came from tracks{itrack} where
+            % length > MinLength (getBayesianDiffusivity default MinLength = splitLength - 1).
+            % The MinLength used is not stored, but any track in X must be
+            % at least splitLength frames long.  Use splitLength - 1 as the
+            % threshold (matching the default MinLength = 6 for splitLength = 7).
+            x_to_tracks = find(cellfun('size', all_tracks, 1) > (splitLen_pem - 1));
+
+            n_parents   = max(splitIdx);
+            parent_state  = nan(n_parents, 1);
+            parent_purity = nan(n_parents, 1);
+            parent_nconf  = zeros(n_parents, 1);
+
+            for k = 1:n_parents
+                subs = find(splitIdx == k);
+                conf = subs(confident(subs));
+                parent_nconf(k) = numel(conf);
+
+                if numel(conf) < o.MinSubtracks
+                    continue;
+                end
+
+                states_k = map_state(conf);
+                % Majority vote
+                counts = accumarray(states_k, 1, [n_states, 1]);
+                [mx, majority] = max(counts);
+                purity = mx / numel(conf);
+
+                if purity >= o.Purity
+                    parent_state(k)  = majority;
+                    parent_purity(k) = purity;
+                end
+            end
+
+            assigned = ~isnan(parent_state);
+            fprintf('getFBMByPEMState: %d / %d parent tracks assigned (Purity>=%.2f, MinSubtracks>=%d)\n', ...
+                sum(assigned), n_parents, o.Purity, o.MinSubtracks);
+
+            % --- Retrieve ExposureFraction from pEM params if available ------
+            if isfield(obj.pEMParams, 'trackInfo') && isfield(obj.pEMParams.trackInfo, 'R')
+                R = obj.pEMParams.trackInfo.R;
+                % R = (1/6) * dE / dt  → frac = 6*R*dt / dt... but R is the
+                % motion-blur ratio, not directly ExposureFraction.
+                % Use 1 as default; user can override via pEM params if needed.
+                frac = 1;
+            else
+                frac = 1;
+            end
+
+            % --- Per-state fBM fitting ----------------------------------------
+            results = struct('state', cell(n_states,1), 'n_tracks', cell(n_states,1), ...
+                'K', cell(n_states,1), 'alpha', cell(n_states,1), ...
+                'Ka', cell(n_states,1), 'sigma', cell(n_states,1), ...
+                'CI', cell(n_states,1), 'pertracks', cell(n_states,1), ...
+                'skipped', cell(n_states,1), 'track_indices', cell(n_states,1), ...
+                'mean_purity', cell(n_states,1), ...
+                'pem_D', cell(n_states,1), 'pem_sigma', cell(n_states,1));
+
+            % Filtered proportions under the PP/DeltaPP thresholds
+            fprintf('\nState fractions (after PP/DeltaPP/Purity filters):\n');
+
+            for s = 1:n_states
+                parent_idx = find(parent_state == s);  % indices in X
+                results(s).state = s;
+                results(s).pem_D = pt.optimalD{1}(s);
+                results(s).pem_sigma = pt.optimalS{1}(s);
+
+                % Map parent indices in X → indices in all_tracks
+                if numel(x_to_tracks) >= max(parent_idx, [], 'all')
+                    track_idx = x_to_tracks(parent_idx);
+                else
+                    track_idx = parent_idx;
+                end
+
+                % Length filter for fBM
+                trk_lens = cellfun('size', all_tracks(track_idx), 1);
+                long_enough = trk_lens >= o.MinTrackLength;
+                track_idx = track_idx(long_enough);
+
+                results(s).track_indices = track_idx;
+                results(s).n_tracks = numel(track_idx);
+                results(s).mean_purity = mean(parent_purity(parent_idx), 'omitnan');
+                results(s).skipped = false;
+
+                fprintf('  State %d: %d tracks (pEM D=%.4f µm²/s, mean purity=%.2f)\n', ...
+                    s, numel(track_idx), results(s).pem_D, results(s).mean_purity);
+
+                if numel(track_idx) < o.MinGroupSize
+                    fprintf('    (< MinGroupSize=%d, skipping fBM)\n', o.MinGroupSize);
+                    results(s).skipped = true;
+                    continue;
+                end
+
+                state_tracks = all_tracks(track_idx);
+
+                % Optional pre-filter within this state
+                if o.MinStepVar > 0
+                    mobile = cellfun(@(t) mean(diff(t(:,1)).^2 + diff(t(:,2)).^2) >= o.MinStepVar, state_tracks);
+                    state_tracks = state_tracks(mobile);
+                    track_idx    = track_idx(mobile);
+                    results(s).track_indices = track_idx;
+                    results(s).n_tracks      = numel(track_idx);
+                    if o.Verbose
+                        fprintf('    removed %d stuck tracks\n', sum(~mobile));
+                    end
+                end
+
+                fprintf('    fitting population fBM MLE (%d tracks)...\n', numel(state_tracks));
+                try
+                    [fp, ~, ci] = fitFBM_MLE(state_tracks, dt, ...
+                        'ExposureFraction', frac, ...
+                        'SubtrackLength',   o.SubtrackLength, ...
+                        'CIMethod',         o.CIMethod, ...
+                        'Verbose',          false);
+                    results(s).K     = fp.K;
+                    results(s).alpha = fp.alpha;
+                    results(s).Ka    = fp.Ka;
+                    results(s).sigma = fp.sigma;
+                    results(s).CI    = ci;
+                    fprintf('    alpha=%.3f [%.3f, %.3f], K=%.4g, Ka=%.4g, sigma=%.4f µm\n', ...
+                        fp.alpha, ci.alpha(1), ci.alpha(2), fp.K, fp.Ka, fp.sigma);
+                catch ME
+                    warning('getFBMByPEMState: fBM MLE failed for state %d: %s', s, ME.message);
+                    results(s).skipped = true;
+                end
+
+                % Optional per-track distribution within this state
+                if o.PerTrack && ~results(s).skipped
+                    ptk = fitFBM_pertracks(state_tracks, dt, ...
+                        'ExposureFraction',  frac, ...
+                        'SigmaFixed',        results(s).sigma, ...
+                        'MaxSubtrackLength', o.MaxSubtrackLength, ...
+                        'MinStepVar',        o.MinStepVar, ...
+                        'Verbose',           false);
+                    if o.MinAlpha > 0
+                        keep_a = ptk.alpha >= o.MinAlpha;
+                        fields = {'alpha','K','Ka','sigma','track_length','loglik','converged','original_index'};
+                        for fi = 1:numel(fields)
+                            if isfield(ptk, fields{fi})
+                                ptk.(fields{fi}) = ptk.(fields{fi})(keep_a);
+                            end
+                        end
+                        ptk.n_tracks  = sum(keep_a);
+                        ptk.n_removed = sum(~keep_a);
+                    end
+                    results(s).pertracks = ptk;
+                    fprintf('    per-track: median alpha=%.3f (n=%d)\n', ...
+                        median(ptk.alpha, 'omitnan'), ptk.n_tracks);
+                end
+            end
+        end
+
         %% Bootstrap CI (separate from pEM)
         function ciResults = computeBootstrapCI(obj, varargin)
             % COMPUTEBOOTSTRAPCI  Compute confidence intervals on a completed pEM run.
@@ -1759,7 +1993,25 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             axis square; box off;
         end
 
-        function globalfig = plotpEMstats(obj)
+        function globalfig = plotpEMstats(obj, varargin)
+            % PLOTPEMSTATS  Per-state subtrack MSD with posterior thresholds.
+            %
+            %   globalfig = tc.plotpEMstats()
+            %   globalfig = tc.plotpEMstats('MinPP', 0.5, 'DeltaPP', 0.2)
+            %
+            %   Name-value options:
+            %     'MinPP'   - min max-posterior to assign a subtrack (default: 0.5)
+            %     'DeltaPP' - min gap between top two posteriors (default: 0.2)
+            %     'MinFrac' - discard states with < this fraction (default: 0.025)
+
+            varargin = unpack_opts(varargin{:});
+            ip = inputParser;
+            addParameter(ip, 'MinPP',   0.5,   @isnumeric);
+            addParameter(ip, 'DeltaPP', 0.2,   @isnumeric);
+            addParameter(ip, 'MinFrac', 0.025, @isnumeric);
+            parse(ip, varargin{:});
+            oo = ip.Results;
+
             if ~obj.IspEMComputed
                 warning('First compute pEM');
                 return;
@@ -1769,17 +2021,22 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             max_pp       = max(pp, [], 2);
             sort_pp      = sort(pp, 2, 'descend');
             delta_pp     = sort_pp(:,1) - sort_pp(:,2);
-            idx          = find(max_pp > 0.5 & delta_pp > 0.2);
+            idx          = find(max_pp >= oo.MinPP & delta_pp >= oo.DeltaPP);
             optimalState = obj.pEMResults.pEMTable.optimalState{1};
             optimalState(setdiff(1:length(optimalState), idx)) = 9;
             actual_num   = length(optimalState) - length(find(optimalState == 9));
+
+            fprintf('plotpEMstats: %d / %d subtracks pass MinPP=%.2f, DeltaPP=%.2f\n', ...
+                actual_num, numel(max_pp), oo.MinPP, oo.DeltaPP);
+
             kept_states  = true(height(proportions), 1);
             for ii = 1:height(proportions)
-                if length(find(optimalState==ii)) / actual_num < 0.025
-                    optimalState(find(optimalState==ii)) = 9;
+                frac_i = length(find(optimalState==ii)) / actual_num;
+                if frac_i < oo.MinFrac
+                    optimalState(optimalState==ii) = 9;
                     kept_states(ii) = false;
                 else
-                    sprintf('state %d proportion %f', ii, length(find(optimalState==ii)) / actual_num);
+                    fprintf('  state %d: proportion %.4f\n', ii, frac_i);
                 end
             end
             splitLength       = 7;
