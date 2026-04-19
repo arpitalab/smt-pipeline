@@ -617,6 +617,7 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             addParameter(p, 'MinLength',       6, @isnumeric);
             addParameter(p, 'SplitLength',     7, @isnumeric);
             addParameter(p, 'NumFeatures',    [], @isnumeric);  % default: splitLength-1, max 10
+            addParameter(p, 'MinStepVar',      0, @isnumeric);  % µm²; drop stuck particles (e.g. 4*sigma^2)
             parse(p, varargin{:});
             opts = p.Results;
 
@@ -676,14 +677,28 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 lambda          = 0.0;
 
                 k       = 1;
+                n_stuck = 0;
                 X       = {};
                 trackID = [];
                 for itrack = 1:numel(tracks)
-                    if size(tracks{itrack}, 1) > opts.MinLength
-                        X{k}       = tracks{itrack}(:, 1:2);   % already in µm
-                        trackID(k) = k;
-                        k = k + 1;
+                    if size(tracks{itrack}, 1) <= opts.MinLength
+                        continue;
                     end
+                    if opts.MinStepVar > 0
+                        tr_xy = tracks{itrack}(:, 1:2);
+                        msv   = mean(diff(tr_xy(:,1)).^2 + diff(tr_xy(:,2)).^2);
+                        if msv < opts.MinStepVar
+                            n_stuck = n_stuck + 1;
+                            continue;
+                        end
+                    end
+                    X{k}       = tracks{itrack}(:, 1:2);   % already in µm
+                    trackID(k) = itrack;   % map back to original tracks index
+                    k = k + 1;
+                end
+                if opts.MinStepVar > 0
+                    fprintf('getBayesianDiffusivity: %d tracks removed by MinStepVar filter (< %.4g µm²)\n', ...
+                        n_stuck, opts.MinStepVar);
                 end
 
                 [splitX, splitIndex] = SplitTracks(X, splitLength);
@@ -1319,6 +1334,8 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             %     'MinTrackLength' - minimum length (frames) for fBM fitting
             %                        (default: 20)
             %     'MinGroupSize'   - minimum tracks per state for fBM (default: 50)
+            %     'MinFracTracks' - minimum fraction of total assigned tracks
+            %                        a state must contain to run fBM (default: 0.05)
             %     'SubtrackLength' - fBM MLE subtrack length (default: 20)
             %     'CIMethod'       - CI method for fitFBM_MLE (default: 'profile')
             %     'PerTrack'       - also run fitFBM_pertracks (default: false)
@@ -1334,6 +1351,7 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             addParameter(p, 'MinSubtracks',      1,         @isnumeric);
             addParameter(p, 'MinTrackLength',    20,        @isnumeric);
             addParameter(p, 'MinGroupSize',      50,        @isnumeric);
+            addParameter(p, 'MinFracTracks',     0.05,      @isnumeric);
             addParameter(p, 'SubtrackLength',    20,        @isnumeric);
             addParameter(p, 'CIMethod',          'profile', @ischar);
             addParameter(p, 'PerTrack',          false,     @islogical);
@@ -1369,13 +1387,9 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             % splitIdx(j) = parent track index in X (the length-filtered array).
             % Reconstruct X to get the full-length parent tracks for fBM.
             all_tracks = obj.getAllCulledTracks();
-            splitLen_pem = obj.pEMResults.pEMTable.trackInfo{1}.splitLength;
-            % Rebuild X index map: X{k} came from tracks{itrack} where
-            % length > MinLength (getBayesianDiffusivity default MinLength = splitLength - 1).
-            % The MinLength used is not stored, but any track in X must be
-            % at least splitLength frames long.  Use splitLength - 1 as the
-            % threshold (matching the default MinLength = 6 for splitLength = 7).
-            x_to_tracks = find(cellfun('size', all_tracks, 1) > (splitLen_pem - 1));
+            % trackID maps parent index in X → index in original tracks array.
+            % Stored by getBayesianDiffusivity when building X.
+            x_to_tracks = pt.trackID{1};
 
             n_parents   = max(splitIdx);
             parent_state  = nan(n_parents, 1);
@@ -1427,6 +1441,9 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 'mean_purity', cell(n_states,1), ...
                 'pem_D', cell(n_states,1), 'pem_sigma', cell(n_states,1));
 
+            % Count total assigned tracks (for MinFracTracks threshold)
+            n_total_assigned = sum(assigned);
+
             % Filtered proportions under the PP/DeltaPP thresholds
             fprintf('\nState fractions (after PP/DeltaPP/Purity filters):\n');
 
@@ -1453,11 +1470,15 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 results(s).mean_purity = mean(parent_purity(parent_idx), 'omitnan');
                 results(s).skipped = false;
 
-                fprintf('  State %d: %d tracks (pEM D=%.4f µm²/s, mean purity=%.2f)\n', ...
-                    s, numel(track_idx), results(s).pem_D, results(s).mean_purity);
+                state_frac = numel(parent_idx) / max(n_total_assigned, 1);
+                fprintf('  State %d: %d tracks (%.1f%% of assigned, pEM D=%.4f µm²/s, mean purity=%.2f)\n', ...
+                    s, numel(track_idx), 100*state_frac, results(s).pem_D, results(s).mean_purity);
 
-                if numel(track_idx) < o.MinGroupSize
-                    fprintf('    (< MinGroupSize=%d, skipping fBM)\n', o.MinGroupSize);
+                min_by_frac = round(o.MinFracTracks * n_total_assigned);
+                min_required = max(o.MinGroupSize, min_by_frac);
+                if numel(track_idx) < min_required
+                    fprintf('    (%d tracks < min(%d, %.0f%% of %d = %d), skipping fBM)\n', ...
+                        numel(track_idx), o.MinGroupSize, 100*o.MinFracTracks, n_total_assigned, min_by_frac);
                     results(s).skipped = true;
                     continue;
                 end
