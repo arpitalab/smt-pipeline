@@ -86,6 +86,79 @@ fully-commented end-to-end scripts.
 
 ---
 
+## Persistence and copying
+
+`TrajectoryCollection` inherits from `matlab.mixin.Copyable`, so deep copies
+are explicit and safe:
+
+```matlab
+tc2 = tc.copy();   % independent collection — analyses on tc2 do not touch tc
+```
+
+`tc.save(filename)` writes a `.mat` (forced `-v7.3`) containing every
+analysis result (pEM state assignments, bootstrap CIs, MSD fits, RL
+decomposition, fBM fits, lifetime curves) plus enough metadata
+(file paths, ROIs, `Parameters`, `PixelSize`, `FrameInterval`) to
+rebuild tracks on demand. Track matrices (`RawTracks`, `RelativeTracks`)
+are stripped at serialization time via each wrapper's `saveobj` — the
+in-memory object is **not** modified.
+
+```matlab
+tc.save('results/H2B_E2_1kPa_200ms.mat');
+
+% later session:
+data = load('results/H2B_E2_1kPa_200ms.mat');
+tc   = data.tc;
+tc.reloadTracks();   % optional, ~5–10 min: rebuild RawTracks from CSVs
+```
+
+Typical file size without tracks is ~100–400 MB, dominated by
+`pEMBootstrapInputs`. Skip `reloadTracks()` if you only need analysis
+results, plotting, or database registration.
+
+---
+
+## Analysis catalogue
+
+Methods on `TrajectoryCollection` (all accept `'Condition', <tag>`
+sub-selection unless noted):
+
+| Method | What it does |
+|---|---|
+| `getMSD` | Ensemble MSD with bootstrap fBM fits and motion-blur correction (`ExposureTime`). |
+| `getRLDecomposition` | Richardson–Lucy MSD decomposition into diffusivity states; supports `SigmaLoc` localization-noise correction and per-state Toeplitz MLE fBM overlay. |
+| `getBayesianDiffusivity` | pEMv2 state classification with stuck-particle filter and bootstrap CIs (`pEMv2_bootstrap_CI`). |
+| `getFBMByPEMState` | Per-state fBM MLE fits (`α`, `D`) on tracks assigned to each pEM state, with a configurable minimum-fraction threshold. |
+| `getStateArrayPosterior` / `getStateArrayPosteriorBootstrap` | saSPT state-array posterior over the full `(D, σ_loc)` grid, with cluster (FOV) bootstrap or jackknife CIs on the marginal `D` posterior. |
+| `getPcDistribution` | Convex-hull / sum-squared-step confinement metric per track. |
+| `getLifetime` | Track-length survival curves with photobleaching correction. |
+| `getVanHove` | Self-part van Hove correlation. |
+| `plotMSD`, `plotRLDecomposition`, `plotFBMFit`, `plotpEMstats` | Companion plotters; thresholds and overlays are parameterised. |
+
+Stand-alone utilities in `utils/` that operate on culled tracks (cell
+array or `TrajectoryCollection`):
+
+| Utility | Purpose |
+|---|---|
+| `computePackingFraction` | Per-track packing fraction `Pc` (spatial confinement via convex hull / step variance). |
+| `computeReturnProbability` | Per-track recurrence score: fraction of spatially-near localisations that are also temporally-near. Orthogonal axis to `Pc` — separates *transient* slow motion from *recurrent* caged motion. |
+| `classifyTracksGMM` | Two-component GMM classifier on per-track `(α, log D)` from fBM fits. |
+| `fitFBM_MLE`, `fitFBM_pertracks` | Toeplitz-likelihood fBM fits on the ensemble or per-track. |
+| `saSPT/` | Standalone saSPT engine (`saSPT_splitTracks`, `saSPT_calc_likelihood`, `saSPT_compute_posterior`, `saSPT_bootstrap_CI`) used by `getStateArrayPosterior*`; can also be called directly on a cell-of-cells of tracks. |
+| `compareStateArrayPosteriors` | Quantitative two-condition comparison of saSPT marginal `D` posteriors (Wasserstein-1 on log10 D, slow/fast fraction differences) with paired-bootstrap CIs. |
+| `exportTracksForBayesMSD` / `run_bayesmsd.py` | Hand-off to the BayesMSD Python package. |
+| `compare_covariances.py` | Empirical-vs-fBM step-covariance diagnostic. |
+| `plot_tracks_by_alpha.m` | Per-track trajectory plot coloured by fitted `α`. |
+
+```matlab
+% Orthogonal confinement axes
+Pc = computePackingFraction(tc);
+R  = computeReturnProbability(tc, 'Radius', 0.1, 'TimeWindow', 0.1);
+scatter(Pc, R); xlabel('P_c'); ylabel('return prob.');
+```
+
+---
+
 ## SMTDatabase
 
 `SMTDatabase` is a SQLite-backed registry that tracks experiments, condition groups, and analysis results across sessions. It requires **MATLAB R2022b+** (uses the built-in `sqlite` function — no Database Toolbox needed).
@@ -299,13 +372,25 @@ smt-pipeline/
 │   ├── relativeTracksFromForest.m
 │   ├── find_bound_particles_2.m
 │   ├── fun_v.m
-│   ├── fillGapsWithNaN.m     % insert NaN at missing frames
-│   ├── simple_msd.m          % per-track MSD supporting gapped trajectories
-│   ├── my_fun.m              % fBM MSD model for lsqnonlin fitting
+│   ├── fillGapsWithNaN.m         % insert NaN at missing frames
+│   ├── simple_msd.m              % per-track MSD supporting gapped trajectories
+│   ├── my_fun.m                  % fBM MSD model for lsqnonlin fitting
 │   ├── calc_MME.m
 │   ├── calc_phi_r.m
 │   ├── calc_phi_r_allpairs.m
-│   └── RL_analysis/          % MSD, van Hove, pEM helpers
+│   ├── computePackingFraction.m  % per-track Pc (spatial confinement)
+│   ├── computeReturnProbability.m% per-track recurrence (orthogonal to Pc)
+│   ├── classifyTracksGMM.m       % GMM on per-track (α, log D)
+│   ├── fitFBM_MLE.m              % Toeplitz MLE fBM fit (ensemble)
+│   ├── fitFBM_pertracks.m        % Toeplitz MLE fBM fit per track
+│   ├── pEMv2_bootstrap_CI.m      % bootstrap CIs for pEM state fractions
+│   ├── compareStateArrayPosteriors.m % two-condition saSPT posterior comparison
+│   ├── saSPT/                    % saSPT engine (split / likelihood / posterior / bootstrap)
+│   ├── exportTracksForBayesMSD.m % hand-off to BayesMSD
+│   ├── run_bayesmsd.py           % BayesMSD driver
+│   ├── compare_covariances.py    % empirical-vs-fBM covariance check
+│   ├── plot_tracks_by_alpha.m
+│   └── RL_analysis/              % MSD, van Hove, pEM helpers
 ├── third_party/
 │   └── matlab-toml/          % git submodule (MIT license)
 └── examples/
