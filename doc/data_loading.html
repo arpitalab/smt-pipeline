@@ -15,6 +15,7 @@
   <a href="fbm_analysis.html">fBM</a>
   <a href="rl_analysis.html">RL</a>
   <a href="pem_analysis.html">pEM</a>
+  <a href="saspt_analysis.html">saSPT</a>
   <a href="lifetime.html">Lifetime &amp; DACF</a>
   <a href="track_filtering.html">Filtering</a>
   <a href="struct_options.html">Struct Options</a>
@@ -205,6 +206,36 @@ but not stored as the primary cached result).
 
 <pre><code>% Set condition after loading
 tc.setCondition('3', 'Treated');   % change condition for FileID '3'</code></pre>
+
+<h3 id="persistence">Persistence, reloading, and deep copies</h3>
+<p>
+<code>TrajectoryCollection</code> inherits from <code>matlab.mixin.Copyable</code>, so deep
+copies are explicit. <code>tc.save(filename)</code> writes a <code>-v7.3</code> <code>.mat</code>
+with every analysis result plus enough metadata (file paths, ROIs,
+<code>Parameters</code>, <code>PixelSize</code>, <code>FrameInterval</code>) to rebuild tracks
+on demand. The heavy track matrices (<code>RawTracks</code>, <code>RelativeTracks</code>)
+are stripped at serialization time via each wrapper's <code>saveobj</code>; the
+in-memory object is not modified.
+</p>
+
+<pre><code>tc.save('results/H2B_E2_1kPa_200ms.mat');
+
+% --- later session ---------------------------------------------------------
+data = load('results/H2B_E2_1kPa_200ms.mat');
+tc   = data.tc;
+tc.reloadTracks();        % optional, ~5–10 min: rebuild RawTracks from CSVs
+
+% Deep-copy before running new analyses so the loaded baseline stays intact:
+tc_work = tc.copy();      % independent collection; analyses on tc_work do not touch tc</code></pre>
+
+<p>
+Pick a variable name on the copy that reflects the experiment you are about
+to run (<code>tc_resample</code>, <code>tc_nofilter</code>, <code>tc_E2</code>, ...) — the
+original <code>tc</code> then remains a clean reference to the on-disk state.
+Skip <code>reloadTracks()</code> if you only need analysis results, plotting, or
+database registration; typical file size without tracks is ~100–400 MB,
+dominated by <code>pEMBootstrapInputs</code>.
+</p>
 
 <footer>smt-pipeline docs &mdash; <a href="index.html">index</a></footer>
 </div>

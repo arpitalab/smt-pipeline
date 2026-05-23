@@ -1,0 +1,1530 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{empheq}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{siunitx}
+\usepackage{authblk}
+
+\newcommand{\diff}{\mathrm{d}}
+\newcommand{\eff}{\mathrm{eff}}
+\newcommand{\BP}{\mathrm{BP}}
+\newcommand{\EP}{\mathrm{EP}}
+\newcommand{\msd}{\mathrm{MSD}}
+
+\title{Chromatin first-passage as a constraint on developmental
+positional information, and its consequences for single-molecule readout
+in gastruloids}
+
+\author{[Author]}
+\affil{[Affiliation]}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Lammers, Flamholz, and Garcia~\cite{Lammers2023} recently showed that the
+information rate driving cellular decisions is bounded by a three-way
+tradeoff between transcriptional sharpness, precision, and specificity, and
+that the early \textit{Drosophila} embryo and mammalian cells satisfy this
+bound through fundamentally different reliance on energy dissipation,
+indexed by the noncognate-to-cognate factor concentration ratio $w/c$. We
+argue here that a parallel and physically distinct bound arises from
+chromatin polymer first-passage: even when a transcription factor (TF) has
+correctly identified its cognate enhancer, productive transcription
+requires the enhancer to come into contact with the promoter, and the
+distribution of contact times is set by the chromatin mean-square
+displacement (MSD) exponent~$\alpha$ and the genomic separation~$s$. We
+write down the resulting compound noise budget combining diffusive TF
+counting (Berg--Purcell), polymer-FPT noise on enhancer--promoter contact,
+and the Lammers proofreading term, and analyze its scaling with~$\alpha$.
+The same fly-vs-mouse asymmetry that Lammers identifies on the $w/c$ axis
+appears \emph{simultaneously} on the chromatin axis: \textit{Drosophila}
+nuclear cycle 14 sits comfortably because chromatin is pre-TAD and
+Rouse-like ($\alpha\!\approx\!0.5$); the mouse early embryo sits at the
+bound only by replacing fast single-locus first-passage with multi-enhancer
+redundancy, paracrine cell--cell averaging, and intra-TAD geometry. We
+specialize to 2D mouse gastruloids, where the morphogen gradient is
+self-organized rather than imposed, and propose a single-molecule
+measurement program based on H2B and Sox2/Bra tracking that decomposes the
+readout-noise budget term-by-term and discriminates reaction--diffusion
+from localized-source mechanisms of symmetry breaking.
+\end{abstract}
+
+\section{Introduction}
+
+The classical Berg--Purcell bound on diffusion-limited concentration sensing
+states that a receptor of size $a$ measuring a ligand at free concentration
+$c$ for a time $T$ has fractional concentration error
+\begin{equation}
+  \left(\frac{\delta c}{c}\right)^{\!2}_{\BP}
+  \;\gtrsim\; \frac{1}{a\,D\,c\,T}.
+  \label{eq:bp}
+\end{equation}
+Gregor and colleagues~\cite{Gregor2007a,Gregor2007b} applied this bound to
+the readout of the Bicoid (Bcd) gradient in the syncytial \textit{Drosophila}
+blastoderm and showed that the embryo positions the \textit{hunchback}
+expression boundary at $\sim$1\% egg length, essentially saturating
+\eqref{eq:bp} for the available cycle-14 integration time of $T \approx
+\SI{180}{\second}$. Recent work has extended this picture in two directions
+that motivate the present paper.
+
+First, Lammers, Flamholz, and Garcia~\cite{Lammers2023} introduced an
+information-rate (IR) framework based on a kinetic, multi-state model of
+transcriptional bursting. Their bound on the time required to distinguish
+two TF concentrations differing by $\delta c/c$ takes the form
+\begin{equation}
+  \overline{T} \;\geq\; \frac{\ln\!\left(\frac{1-\varepsilon}{\varepsilon}\right)(1-2\varepsilon)}{\mathrm{IR}},
+  \qquad
+  \mathrm{IR} \;=\; \tfrac{1}{2}\!\left(\tfrac{\delta c}{c^{*}}\right)^{\!2}\, s^{2}\, p^{2},
+  \label{eq:lammers}
+\end{equation}
+where~$s$ and~$p$ are sharpness and precision of the gene's input--output
+function. They show that at equilibrium, sharpness is bounded by the number
+of TF binding sites and precision by intrinsic gene-circuit noise; the
+specificity~$f$ relating cognate to noncognate binding is bounded by the
+intrinsic affinity ratio~$\alpha_{Lammers}$. In the high-interference
+regime where the noncognate factor concentration~$w$ is large compared with
+$\alpha_{Lammers}\,c$, equilibrium gene circuits cannot drive timely
+decisions; energy dissipation through kinetic-proofreading-like cycles is
+required to break the sharpness--precision--specificity tradeoff. Lammers
+\textit{et al.} estimate $w/c\approx 47$ for the early \textit{Drosophila}
+embryo (low interference; equilibrium suffices), $w/c\le 698$ for
+\textit{C.~elegans}, and $w/c\le 1426$ for mouse (high interference;
+nonequilibrium activator proofreading required).
+
+Second, Br\"uckner and colleagues~\cite{Bruckner2023} measured directly,
+using paired live-imaging of enhancer and promoter loci, that
+enhancer--promoter (EP) encounter times in fly nuclei show \emph{anomalous
+scaling with genomic separation}, weaker than predicted by the standard
+fractional-Langevin / Rouse polymer scaling. Hansen-lab two-color tracking
+of CTCF-anchored loops in mESCs~\cite{Gabriele2022,Mach2022} measured
+mammalian-interphase EP-equivalent contacts as rare and short:
+minute-to-tens-of-minute lifetimes occupying only a few percent of the
+cell cycle.
+
+These two threads --- Lammers' kinetic bound and the empirical chromatin
+dynamics --- bear on the same problem (timely transcriptional decisions
+under physical noise) but address physically distinct bottlenecks.
+Lammers~\cite{Lammers2023} models the locus as a single point, with
+specificity-vs-precision tradeoffs against an interfering noncognate factor
+pool; the chromatin polymer in which the locus is embedded does not enter.
+Br\"uckner~\cite{Bruckner2023} measures the polymer dynamics but does not
+derive a noise budget. Lucas \textit{et al.}~\cite{Lucas2018} explicitly
+note, on the basis of MS2 imaging at \textit{hb}, that Berg--Purcell
+predictions do not fully account for the observed precision and that
+``additional mechanisms beyond simple diffusive readout'' must be at play.
+
+Here we close that gap. We treat chromatin polymer first-passage as a
+distinct physical constraint on transcriptional decision time, write down
+the resulting compound noise budget, and show that it identifies a second
+fly-vs-mouse asymmetry --- on the chromatin MSD exponent~$\alpha$ ---
+running parallel to Lammers' $w/c$ asymmetry. The two constraints are
+independent: a system can satisfy one and fail the other. Both must be
+satisfied for the readout to be physically realizable in the available
+window. We then specialize to 2D mouse gastruloids, in which both axes are
+experimentally accessible by single-molecule tracking of histone H2B
+(chromatin axis) and of Sox2/Bra (TF kinetics axis), and propose a
+measurement program decomposing the readout-noise budget term-by-term.
+
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Lammers, Flamholz, Garcia 2023~\cite{Lammers2023}.}
+The most direct precedent. Frames cellular decisions as an information-rate
+problem with a precision/sharpness/specificity tradeoff, and derives the
+fly-vs-mouse split from the noncognate-factor interference ratio~$w/c$. We
+adopt their decision-time formulation~\eqref{eq:lammers} and treat our
+polymer term as an additional, physically independent constraint operating
+in parallel. Their model takes the gene locus as a structureless point;
+chromatin dynamics enter neither the sharpness, precision, nor specificity
+budget. They explicitly note (\textit{op.~cit.}) that ``transcription is
+also thought to require multiple molecular steps beyond activator binding
+itself, such as the localization of key general transcription factors to
+the gene locus,'' which the present framework formalizes.
+
+\paragraph{Br\"uckner \textit{et al.} 2023~\cite{Bruckner2023}.} Provides
+the empirical foundation for treating chromatin first-passage as an
+independent constraint. Two-color live-imaging of EP-pair separation in
+\textit{Drosophila} nuclei shows ``the coexistence of a compact globular
+organization and fast subdiffusive dynamics. These combined features cause
+an anomalous scaling of polymer relaxation times with genomic separation
+leading to long-ranged correlations. Thus, encounter times of DNA loci are
+much less dependent on genomic distance than predicted by existing polymer
+models, with potential consequences for eukaryotic gene expression.''
+This finding pushes effective $\tau_c$ \emph{down} relative to the naive
+Rouse scaling, which favors the compatibility of the polymer term with
+\textit{Drosophila} nc14 readout.
+
+\paragraph{Shi, Shin, Thirumalai 2025~\cite{Shi2025}.} A theoretical
+treatment that resolves the Br\"uckner conundrum and reframes the polymer
+side of the present bound. Using the HIPPS-DIMES maximum-entropy
+reconstruction, they show that the static three-dimensional contact map
+(Hi-C / Micro-C) determines a connectivity matrix~$\mathbf{K}$ whose
+eigendecomposition predicts the two-point relaxation times $\tau$, the
+mean first-passage times $\tau_c$, and single-locus diffusivities ---
+quantitatively reproducing the Br\"uckner $\tau\sim s^{0.7\text{--}0.8}$
+scaling and the experimental $\tau_c\sim\langle r\rangle^{3.4}$. Three
+findings bear directly on this paper. First, randomly shuffling the WT
+contact map (preserving polymer connectivity) destroys the scaling:
+the rapid dynamics is a property of the specific cohesin- and TF-organized
+contact pattern, not of any homopolymer property. Second, even an
+\emph{effective-homopolymer} reduction of the WT distance map gives
+$\tau\sim s^{1.1}$ and $\tau\sim r^{4}$, distinct from the WT exponents,
+implying that the closed-form fractional-Langevin scaling
+\eqref{eq:tau_c} is structurally inadequate for chromatin and should be
+read as a homopolymer reference rather than as the operative law. Third,
+acute cohesin depletion ($\Delta$RAD21) reorganizes $\mathbf{K}$ in a
+locus-specific, signed manner: $\tau_{ij}$ \emph{increases} for intra-TAD
+pairs (because $\langle r\rangle$ grows) and \emph{decreases} for
+TAD-boundary pairs, while ensemble single-locus diffusivity rises
+$\sim$20--40\% with the local fractional-Langevin exponent~$\alpha$
+largely preserved. Their derivation of a polymer-FPT Hill law,
+$\hat k = 1/(1+(\tau_0/\tau_d)p_c^{-\theta})$, supplies a mechanistic
+bridge from~$\tau_c$ to a hypersensitive transcriptional output that is
+independent of, and complementary to, the Xiao~\cite{Xiao2021}
+futile-cycle bistability.
+
+\paragraph{Kim \& Larson 2025~\cite{KimLarson2025}.} The closest
+conceptual precedent for the coupled framework derived in
+Section~\ref{sec:gated}. Reviews transcriptional bursting models in
+development and explicitly extends the two-state telegraph model with a
+kinetic-proofreading step (their Fig.~3, p.~1000), arriving at the
+specificity expression
+$\psi \approx 1 - E/M$ with $E = k_f k_s/(k_{\mathrm{off}}k_p)$ and $M$ the
+ratio of nonspecific to specific binding. Their treatment formalizes the
+speed--efficiency--specificity tradeoff that Gregor's timing constraint
+implies for development and is, to our knowledge, the only published
+extension of the Gregor framework with explicit kinetic proofreading.
+Their proofreading model, however, assumes that the substrate (the TF)
+is at the locus and that the cycle runs freely once initiated; the
+chromatin-polymer step that brings enhancer and promoter into productive
+contact, and the finite contact dwell time that gates the proofreading
+cycle, do not enter their derivation. Kim \& Larson~\cite{KimLarson2025}
+explicitly identify this as an open question (their Question~1, p.~1007:
+``How do different chromatin states and 3D genome organization influence
+transcription bursting kinetics?''). Section~\ref{sec:gated} of the
+present work fills that gap by formally coupling polymer first-passage
+to the proofreading cycle and showing that the resulting bound is a
+threshold rather than a smooth tradeoff.
+
+\paragraph{Garcia, Upadhyaya, Hager 2021~\cite{Garcia2021NAR}.}
+Establishes that transcription-factor residence-time distributions
+measured by SMT in living cells are not exponential but power-law. The
+methodological insight is that H2B survival-time distributions in live
+cells contain three components, of which the slowest reflects pure
+photobleaching of the fluorophore rather than any chromatin-residence
+process; dividing measured TF survival distributions by this H2B-derived
+photobleaching kernel yields the photobleaching-corrected residence
+distribution, which is heavy-tailed and best described by a continuum of
+dissociation-rate states. This is a different and more direct route to
+the same conclusion subsequently reached by GRID-style algorithms
+\cite{Popp2021}. We adopt the Garcia \textit{et al.} result as the
+empirical anchor for distinguishing
+\emph{per-site} dwell times (exponential, with site-specific
+$k_{\mathrm{off}}$) from the \emph{TF-perspective} residence-time
+distribution (population-level mixture of per-site exponentials,
+empirically heavy-tailed). The proofreading derivation in
+Section~\ref{sec:gated} operates at the per-event level and so retains
+its single-exponential per-engagement form. The implicit assumption ---
+made explicit in Section~\ref{ssec:mixture} --- is that the long-residence
+mass of the SMT distribution corresponds to TFs at cognate response
+elements, and the short-residence mass to noncognate or transient
+binding.
+
+\paragraph{Mazzocca \textit{et al.} 2024~\cite{Mazzocca2024}.}
+MINFLUX+HILO measurements of H2B dynamics under acute cohesin (RAD21)
+depletion in mammalian interphase nuclei find a small effect on
+single-locus diffusivity and no detectable shift in the anomalous
+exponent~$\alpha$. This is the empirical signature predicted by
+Shi~\textit{et al.}~\cite{Shi2025}: cohesin loss perturbs the global
+$\mathbf{K}$ structure (centralities, eigenmode gap) while the local
+fractional-Langevin exponent, set by short-time monomer dynamics, is
+preserved. We use this dataset, together with pEM analysis of H2B in
+3617 cells under RAD21 depletion (which shows shifted state fractions
+without a detectable within-state~$\alpha$ change), as the calibration
+anchor for the chromatin axis of~\eqref{eq:star} on the mouse side.
+
+\paragraph{Lucas \textit{et al.} 2018~\cite{Lucas2018}.} MS2 imaging at
+\textit{hb} establishes that the observed boundary precision exceeds simple
+diffusion-limited Berg--Purcell predictions, motivating ``additional
+mechanisms beyond simple diffusive readout.'' The Bcd-hub
+work~\cite{Mir2017,Mir2018} provides one such mechanism (locally elevated
+$c_{\mathrm{free}}$); the polymer-FPT framework here provides another
+(short $\tau_c$ in pre-TAD chromatin), and the two are not mutually
+exclusive.
+
+\paragraph{Chen \textit{et al.} 2018~\cite{Chen2018}.} The first
+simultaneous live-cell measurement of EP topology and transcriptional
+activity in fly nc14 embryos, at the \textit{eve} locus with a reporter
+integrated 142\,kb upstream. Three topological states are resolved:
+$O_{\mathrm{off}}$ (open, distal, $\sim$87\% of nuclei, mean EP separation
+730\,nm), $P_{\mathrm{off}}$ (paired but transcriptionally inactive,
+$\sim$6\%, 385\,nm), and $P_{\mathrm{on}}$ (paired and active, $\sim$7\%,
+331\,nm). Four findings revise the framework. First, the open-to-paired
+transition rate ($f_1 = 0.017\text{/min}$, $\sim$1\,hr mean) is
+\emph{slower} than the naive polymer first-passage prediction from MSD
+scaling by approximately a factor of eight, indicating that an entropic
+or architectural step beyond simple polymer encounter is required, with
+the \textit{homie} insulator providing this step at \textit{eve}. Second,
+sustained physical proximity is necessary for transcription: EP distance
+declines continuously to $\sim$340\,nm and is held there before firing,
+ruling out hit-and-run activation. Third, transcription itself stabilizes
+the paired state: the active-paired dwell ($1/b_3\approx 90$\,min) is
+roughly an order of magnitude longer than the inactive-paired dwell
+($1/b_2\approx 7$\,min), implying a strong positive feedback between
+firing and contact stability. Fourth, integration of a reporter at this
+distance from \textit{eve} reduces endogenous \textit{eve} expression by
+5--20\% per stripe and produces $\sim$5-fold increased adult abdominal
+patterning defects, demonstrating that EP topology is a limiting resource
+with phenotypic consequences. Chen \textit{et al.} therefore provides the
+empirical foundation that simultaneously calibrates the polymer-FPT term
+($\tau_c$ longer than the naive scaling), establishes the necessity of
+architectural facilitation, and reveals a non-renewal feedback mechanism
+in which firing itself extends~$\tau_d$.
+
+\paragraph{Saiz, Martinovic \textit{et al.} 2026~\cite{Saiz2026}.} A direct
+test of the structural-loop component of the polymer-FPT picture in the
+mouse system. Auxin-degron depletion of CTCF in 2D mouse gastruloids
+during the fate-decision window (48--72\,h, coincident with Wnt-induced
+symmetry breaking) impairs gastruloid elongation but \emph{leaves cell
+differentiation, ATAC-seq lineage composition, and RNA-seq trajectories
+intact}. Reconstitution with an N-terminally truncated CTCF (incapable of
+cohesin-mediated loop extrusion stalling) rescues early phenotypes;
+gastruloids only collapse later (post-168\,h), revealing a separable role
+for CTCF looping in post-gastrulation fine-tuning. Together with the
+observation that acute degradation of cohesin (Rad21) preserves a
+substantial fraction of chromatin
+contacts~\cite{Rao2017,Schwarzer2017,Hsieh2022}, this argues against a
+strict ``structural-loop $\to$ low $\tau_c$ $\to$ accurate fate readout''
+chain in mouse gastrulation. The polymer-FPT term during the fate-decision
+window is likely more permissive than the rigid-TAD interpretation would
+suggest; CTCF-mediated looping enters as a fine-tuning constraint
+\emph{after} the fate decision rather than as a rate-limiting input to it.
+
+\paragraph{Xiao, Hafner, Boettiger 2021~\cite{Xiao2021}.} An equilibrium
+model that resolves the apparent paradox of TAD-boundary disruptions
+changing EP contact frequency by less than $\sim$2-fold but changing gene
+expression by $\sim$10-fold, via a futile-cycle bistability with
+effective Hill coefficient $n_H\!\gtrsim\!5$. We retain it as a
+phenomenological description of how small structural perturbations
+produce large transcriptional changes, but emphasize that the underlying
+mechanism in living tissue is more naturally read off Chen \textit{et al.}
+\cite{Chen2018}: the ten-fold longer dwell of the transcriptionally
+active paired state, $P_{\mathrm{on}}$, relative to the inactive paired
+state, $P_{\mathrm{off}}$, is a dynamic positive-feedback gain stage that
+the equilibrium futile-cycle model approximates only in projection. The
+practical consequence for the bound below is that firing itself extends
+$\tau_d$, breaking the renewal-process assumption used in
+\eqref{eq:Nprod} once the system has entered the active branch.
+
+\paragraph{Kaizu \textit{et al.} 2014~\cite{Kaizu2014}.} ``The Berg--Purcell
+limit revisited.'' Validates the original Berg--Purcell scaling against
+single-receptor, finite-binding-kinetics simulations. Orthogonal to the
+present work; cited to disambiguate from the title.
+
+\section{The compound bound}
+\label{sec:bound}
+
+Consider a target gene whose transcriptional output during a window~$T$
+requires three steps: (i)~TF occupancy of a cognate enhancer site, with
+steady-state probability~$p_b(c)$ at TF free concentration~$c$; (ii)~EP
+contact, occupying a fraction~$f_{\EP}$ of time with mean inter-contact
+interval~$\tau_c$ and per-contact dwell~$\tau_d$; (iii)~successful firing
+of a transcriptional burst, which requires the contact to persist for at
+least a characteristic time~$\tau_{\mathrm{fire}}$ (the timescale of PIC
+assembly and Pol II initiation, $\sim$tens of seconds). For an
+approximately exponential dwell-time distribution with mean~$\tau_d$, the
+per-contact firing probability is $p_{\mathrm{fire}} = 1 -
+\exp(-\tau_d/\tau_{\mathrm{fire}})$ in the limit where $\tau_d$ is the
+relevant cutoff. The number of productive contacts in window~$T$ is
+\begin{equation}
+  N_{\mathrm{prod}} \;=\; \frac{T}{\tau_c}\;p_{\mathrm{fire}}
+  \;\approx\;
+  \frac{T}{\tau_c}\;\frac{\tau_d}{\tau_{\mathrm{fire}}}
+  \quad\text{(for }\tau_d \ll \tau_{\mathrm{fire}}\text{).}
+  \label{eq:Nprod}
+\end{equation}
+The fractional variance of the gene's output decomposes as
+\begin{equation}
+  \left(\frac{\delta n}{\langle n\rangle}\right)^{\!2}
+  \approx
+  \underbrace{\left(\frac{\delta p_b}{p_b}\right)^{\!2}}_{\substack{\text{TF counting +}\\\text{specificity}}}
+  +
+  \underbrace{\frac{1}{N_{\mathrm{prod}}}}_{\substack{\text{polymer}\\\text{(both signs)}}}.
+  \label{eq:decomp}
+\end{equation}
+The first term inherits both the Berg--Purcell diffusive-counting noise
+\eqref{eq:bp} and the Lammers~\cite{Lammers2023} specificity penalty. The
+second is the \emph{two-sided} polymer constraint: $1/N_{\mathrm{prod}}$
+diverges either when $\tau_c$ is too large (the classical Berg--Purcell-on-EP
+limit, ``not enough attempts'') or when $\tau_d$ is too small relative to
+$\tau_{\mathrm{fire}}$ (the entropic limit, ``each attempt is too brief to
+fire''). Because both~$\tau_c$ and~$\tau_d$ are set by the same polymer
+dynamics, this term is not minimized by simply making the polymer faster;
+fast polymers shrink~$\tau_d$ as well as~$\tau_c$, and the relevant
+dimensionless quantity is the ratio $\tau_c/\tau_d$ multiplied by
+$\tau_{\mathrm{fire}}/T$:
+\begin{equation}
+  \frac{1}{N_{\mathrm{prod}}}
+  \;\approx\;
+  \frac{\tau_c}{\tau_d}\cdot\frac{\tau_{\mathrm{fire}}}{T}.
+  \label{eq:two_sided}
+\end{equation}
+
+The compound bound, applicable per locus per nucleus, is
+\begin{empheq}[box=\fbox]{equation}
+  \left(\frac{\delta c}{c}\right)^{\!2}_{\!\text{total}}
+  \;\gtrsim\;
+  \frac{1}{n_H^{2}}\!\left[
+  \underbrace{\frac{1}{a\,D_{\eff}\,c_{\mathrm{free}}\,T}}_{\text{Berg--Purcell}}
+  \;+\;
+  \underbrace{\Phi\!\left(\frac{w/c}{\alpha_{Lammers}}\right)\frac{1}{s^{2}p^{2}\,T}}_{\text{Lammers specificity/sharpness}}
+  \;+\;
+  \underbrace{\frac{\tau_c(\alpha,s,b)}{\tau_d(\alpha,b)}\cdot\frac{\tau_{\mathrm{fire}}}{T}}_{\text{two-sided polymer}}
+  \right].
+  \label{eq:star}
+\end{empheq}
+The function~$\Phi$ encodes the scaling of the Lammers IR penalty with
+noncognate interference; for low~$w/c$ it is order unity, and for high
+$w/c$ it grows polynomially unless rescued by energy dissipation, in which
+case sharpness, precision, and specificity face the tradeoff bound
+analyzed in~\cite{Lammers2023}. The prefactor~$n_H$ is the effective Hill
+coefficient of the gene-circuit input--output function. For a hypersensitive
+readout in the Xiao futile-cycle regime~\cite{Xiao2021}, $n_H\gtrsim 5$ and
+the apparent positional precision improves by~$1/n_H^{2}\gtrsim 1/25$,
+provided the upstream noise terms reflect \emph{stochastic} fluctuations
+about a fixed mean. The same gain amplifies systematic spatial gradients
+in~$c$ and~$\tau_c$ at the same rate; the readout therefore relies on
+mechanisms (multi-enhancer averaging, paracrine spatial averaging) that
+suppress stochastic~$\delta\tau_c$ without diminishing the systematic
+component. Each of the three terms scales as~$1/T$, but the prefactors are
+set by physically independent processes: diffusive TF counting
+(Berg--Purcell), gene-circuit kinetic architecture plus noncognate
+interference (Lammers), and chromatin polymer dynamics (polymer FPT).
+
+\section{Polymer first-passage scaling}
+\label{sec:scaling}
+
+For a chromatin locus undergoing fractional Langevin motion with monomer
+MSD $\langle\Delta r^{2}(t)\rangle = \Gamma_{\alpha}\,t^{\alpha}$, the
+mean first-passage time for two monomers at equilibrium 3D
+separation~$R(s)$ to come within capture radius~$b$ obeys, in the
+Amitai--Holcman / Gu\'erin--B\'enichou--Voituriez
+form~\cite{Amitai2013,Guerin2016},
+\begin{equation}
+  \tau_c
+  \;\sim\;
+  R(s)^{2}\,\left(\frac{R(s)}{b}\right)^{2/\alpha-1}\,
+  \Gamma_{\alpha}^{-1/\alpha},\qquad \alpha\le 1.
+  \label{eq:tau_c}
+\end{equation}
+Equation~\eqref{eq:tau_c} should be read as a \emph{homopolymer reference}
+rather than as the operative law for chromatin. Shi, Shin, and
+Thirumalai~\cite{Shi2025} show that an effective-homopolymer reduction of
+the wild-type chromatin distance map gives the wrong exponents
+($\tau\sim s^{1.1}$ and $\tau\sim\langle r\rangle^{4}$, vs.\ the
+experimentally measured $\tau\sim s^{0.7\text{--}0.8}$ and
+$\tau\sim\langle r\rangle^{2.6}$), and randomly shuffling the WT contact
+map at fixed polymer connectivity destroys the anomalous scaling
+entirely. The operative quantity is therefore not~\eqref{eq:tau_c} but the
+relaxation time and first-passage time computed from the connectivity
+matrix~$\mathbf{K}$ derived from the static contact map (HIPPS-DIMES). For
+single first-passage to a contact threshold~$r_c$ they obtain the
+Szabo--Schulten--Schulten-like result $\tau_c\propto
+D^{-1}r_c^{-1}\langle r\rangle^{3}$, in quantitative agreement with both
+their theoretical and Br\"uckner's experimental
+trajectories~\cite{Bruckner2023,Shi2025}. We retain~\eqref{eq:tau_c}
+below for dimensional and intuitional purposes only; the operative
+$\tau_c$ used in~\eqref{eq:star} is the empirically measured (or
+HIPPS-DIMES-computed) value at the readout locus.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Regime & $\alpha$ & $2/\alpha-1$ & $\tau_c$ at $s\!\sim\!100$\,kb \\
+\midrule
+Rouse / phantom chain          & 0.5  & 3   & seconds--tens of seconds \\
+Crumpled / mild crowding       & 0.4  & 4   & minutes \\
+Heterochromatic / TAD-confined & 0.25--0.30 & 5.7--7 & tens of minutes--hours \\
+\bottomrule
+\end{tabular}
+\caption{Homopolymer reference values for first-passage scaling. The
+exponent $2/\alpha-1$ in~\eqref{eq:tau_c} drives $\tau_c$ over several
+decades as~$\alpha$ varies in the biologically relevant range.
+\textbf{These regimes do not classify chromatin loci}: Shi
+\textit{et al.}~\cite{Shi2025} demonstrate that the WT chromatin contact
+map produces dynamics not captured by any single~$\alpha$ (the
+connectivity-matrix eigenvalue spectrum exhibits three distinct scaling
+regimes, $|\lambda_p|\propto p^{1.2},\,p^{3},\,p^{1.5}$, across mode
+indices). The table is included for orientation against the homopolymer
+literature; the operative~$\tau_c$ is locus-specific and set by
+$\mathbf{K}$.}
+\label{tab:regimes}
+\end{table}
+
+\paragraph{Empirical correction and structural reframing.} Br\"uckner
+\textit{et al.}~\cite{Bruckner2023} report that EP encounter times in fly
+nuclei depend on genomic separation \emph{less strongly}
+than~\eqref{eq:tau_c} would predict. Shi, Shin, and
+Thirumalai~\cite{Shi2025} resolve this as a structural rather than
+empirical correction: the rapid dynamics is encoded in the WT contact
+map's specific pattern of long-range constraints (likely mediated by
+cohesin and transcription factors) and is reproduced quantitatively by
+the HIPPS-DIMES connectivity matrix using only static Micro-C input. The
+practical effect is to push the operative~$\tau_c$ \emph{below} the
+homopolymer reference of Table~\ref{tab:regimes}, favoring compatibility
+with developmental decision windows; but the framework should be read
+with $\tau_c$ as the contact-map-derived (or directly measured) quantity,
+not as a function of $(\alpha,s,b)$.
+
+\paragraph{The dwell time and the two-sided constraint.} In the homopolymer
+reference, the same parameters that set $\tau_c$ also set the per-contact
+dwell time $\tau_d \sim b^{2}\,\Gamma_{\alpha}^{-1/\alpha}$, and the ratio
+$\tau_c/\tau_d \sim (R/b)^{2/\alpha-1}$ depends only on the geometric ratio
+$R/b$ and the exponent. For fly EP separations ($R\!\sim\!200$\,nm,
+$b\!\sim\!50$\,nm), this gives $\tau_c/\tau_d \sim (R/b)^{3} \approx 64$
+in the Rouse regime: many attempts, each short. With
+$\tau_{\mathrm{fire}} \sim 10\text{--}30$\,s and bare-polymer
+$\tau_d \lesssim 1$\,s, individual contacts fire with low probability,
+consistent with the bursty, low-duty-cycle transcription observed at
+\textit{eve} stripes~\cite{Bothma2014,Lammers2020}. Under
+HIPPS-DIMES~\cite{Shi2025} both $\tau_c$ and the relaxation time $\tau$
+are set by eigenmodes of $\mathbf{K}$, so the closed-form ratio above is
+not the operative quantity for chromatin; we retain the estimate as a
+benchmark against which calibrated values from Chen
+\textit{et al.}~\cite{Chen2018} and Mazzocca
+\textit{et al.}~\cite{Mazzocca2024} are compared.
+
+The Br\"uckner result~\cite{Bruckner2023} is therefore especially
+informative: their measured EP contacts are not just more frequent than
+classical scaling would predict but also \emph{persistently associated}
+along the genomic distance axis, suggesting non-Markovian polymer
+dynamics that selectively extend $\tau_d$ relative to the simple
+fractional-Langevin prediction. This is the empirical resolution of the
+fly side of~\eqref{eq:two_sided}: short~$\tau_c$ \emph{and}, anomalously,
+non-vanishing~$\tau_d$.
+
+\paragraph{Empirical calibration in fly nc14 (Chen 2018).} Chen
+\textit{et al.}~\cite{Chen2018} provide direct measurements of all three
+relevant timescales at \textit{eve} with an EP separation of 142\,kb. The
+mean open-to-paired transition time is $\tau_c \approx 1$\,hr, eight times
+longer than the naive polymer first-passage prediction; the inactive-paired
+dwell is $\tau_d^{\mathrm{off}}\approx 7$\,min; the active-paired dwell is
+$\tau_d^{\mathrm{on}}\approx 90$\,min. Two consequences follow. (i)~The
+naive scaling~\eqref{eq:tau_c} \emph{underestimates}~$\tau_c$ in fly nuclei,
+opposite in sign to the Br\"uckner long-range-correlation
+correction~\cite{Bruckner2023}; the two effects coexist at different EP
+separations and the empirically relevant~$\tau_c$ depends on locus identity
+and architectural elements. (ii)~Once a contact has fired, the relevant
+dwell jumps from $\tau_d^{\mathrm{off}}$ to $\tau_d^{\mathrm{on}}$ ---
+roughly thirteen-fold --- so the bound~\eqref{eq:two_sided} should be read
+with $\tau_d = \tau_d^{\mathrm{on}}$ for productive bursts. The
+positive-feedback mechanism implies that the renewal approximation
+underlying \eqref{eq:Nprod} fails in the active branch, where successive
+contacts are correlated through the persistence of the $P_{\mathrm{on}}$
+state.
+
+\paragraph{Architectural and transcription-stabilized dwell extension.}
+Both fly and mouse readouts circumvent the bare-polymer dwell-time
+limitation through dynamic mechanisms that extend~$\tau_d$ once contact
+is achieved, but via parallel and physically distinct routes. In fly
+nc14, insulator pairing (e.g.\ \textit{homie--homie}~\cite{Chen2018})
+brings the loci into contact, and \emph{transcription itself} stabilizes
+the paired state by an order of magnitude (the
+$P_{\mathrm{off}}\!\to\!P_{\mathrm{on}}$ transition with
+$\tau_d^{\mathrm{on}}\!\sim\!90$\,min vs.\ $\tau_d^{\mathrm{off}}\!\sim\!7$\,min,
+as measured by Chen \textit{et al.}~\cite{Chen2018}). In mouse, cohesin-
+and CTCF-anchored loops~\cite{Gabriele2022,Mach2022} are metastable
+trapped states with lifetimes of tens of minutes,
+$\tau_d^{\mathrm{loop}} \gtrsim \SI{e3}{\second} \gg \tau_{\mathrm{fire}}$,
+occupied only a few percent of the cell cycle. In both cases the system
+trades a high-rate / low-success regime for a low-rate / high-success
+regime, improving $N_{\mathrm{prod}}$ when $\tau_d$ exceeds the firing
+threshold. The fly mechanism is locus-encoded (insulator sequences plus
+transcription-coupled stabilization); the mouse mechanism is genome-wide
+(CTCF/cohesin extrusion). They are not rival hypotheses but parallel
+implementations of the same physical strategy.
+
+This reframing is consistent with the Saiz \textit{et al.} CTCF-AID
+gastruloid result~\cite{Saiz2026}: during fate specification, the system
+operates by sorting between bistable states (Sox2-high vs.\ Bra-high),
+which tolerates short~$\tau_d$ because the multistable dynamics lock in
+the decision once made. After fate specification, accurate expression
+levels require many productive bursts per unit time, which requires
+$\tau_d \gtrsim \tau_{\mathrm{fire}}$, which requires CTCF-anchored loops
+--- recovering the observed late-development requirement for CTCF's
+N-terminal extrusion-stalling function.
+
+\paragraph{A polymer-derived Hill law.} Shi, Shin, and
+Thirumalai~\cite{Shi2025} derive an explicit Hill-form transcription rate
+from the polymer first-passage statistics: assuming the rate is
+$k = 1/(\tau_c+\tau_d)$ and that $\tau_c$ scales with contact probability
+as $\tau_c\sim\tau_0\,p_c^{-\theta}$, the normalized rate becomes
+\begin{equation}
+  \hat k \;=\; \frac{k}{k_{\max}}
+  \;=\; \frac{1}{1 + (\tau_0/\tau_d)\,p_c^{-\theta}},
+  \label{eq:polymer_hill}
+\end{equation}
+with effective ``cooperativity''~$\theta$. This supplies a mechanistic
+bridge from~$\tau_c$ to the prefactor~$n_H$ in~\eqref{eq:star} that is
+\emph{independent of and complementary to} the
+Xiao--Hafner--Boettiger~\cite{Xiao2021} equilibrium futile-cycle
+amplifier: small structural perturbations to $p_c$ produce large changes
+in $\hat k$ through the polymer-FPT response itself, without requiring
+the equilibrium gene-circuit nonlinearity. Where the latter is invoked in
+the Discussion, the polymer-FPT Hill law operates upstream and stacks
+with it.
+
+\paragraph{Compatibility window for fly nc14.} Saturating the Gregor 10\%
+positional precision target with $T = \SI{180}{\second}$ requires
+$\tau_c \lesssim \SI{2}{\second}$ at the single-locus level, loosening to
+$\tau_c \lesssim \SI{10}{\second}$ with Gregor's spatial averaging over
+$\sim$5 syncytial neighbors. Only the Rouse-like regime
+($\alpha\!\approx\!0.5$) reaches this window without the
+Br\"uckner correction; with the correction, the
+crumpled/$\alpha\!\approx\!0.4$ regime becomes marginally accessible.
+
+\section{Polymer-gated kinetic proofreading: a formal coupling}
+\label{sec:gated}
+
+The compound bound \eqref{eq:star} writes the polymer and Lammers terms
+additively, which captures their dimensional independence but not the
+dynamical coupling between them. Kim \& Larson~\cite{KimLarson2025} have
+recently extended the Gregor timing framework with an explicit
+kinetic-proofreading step, arriving at a speed--efficiency--specificity
+tradeoff $\psi\approx 1-E/M$ for transcriptional bursting in development.
+Their treatment, like Lammers~\cite{Lammers2023}, takes the substrate
+(transcription factor) as available at the locus and the proofreading
+cycle as running freely once initiated; the polymer step that brings
+enhancer and promoter into productive contact does not enter. We close
+that gap here. The Lammers framework treats decision-time accrual and
+kinetic-proofreading specificity gain as properties of a gene-circuit
+transition matrix~$\mathbf{K}_{\text{Lammers}}$ whose dynamics presumes
+the gene to be in burst-cycling mode throughout the decision window. Each proofreading cycle requires the locus to
+traverse $N_A$ activation steps in the active conformation, which in turn
+requires sustained EP contact. Finite contact dwell times $\tau_d$
+therefore throttle the rate at which proofreading cycles complete and
+degrade the realized specificity. We derive the coupling here and show
+that, in contrast to the naive duty-cycle suppression
+$\mathrm{IR}_{\mathrm{eff}} = f_{\EP}\cdot\mathrm{IR}_{\mathrm{Lammers}}$,
+the coupled treatment produces a \emph{threshold} at $\tau_d\sim
+N_A\,\tau_{\mathrm{step}}$ rather than a smooth proportional reduction.
+
+\subsection{Gated cycle dynamics}
+
+Let $\tau_{\mathrm{step}}$ denote the mean time per Lammers activation
+step (binding-site engagement, Mediator engagement, PIC assembly,
+Pol\,II loading; $\tau_{\mathrm{step}}\sim 10$--$100$\,s for typical
+chromatin steps). Within a single EP engagement of mean duration
+$\tau_d$, model both forward step completion (rate
+$1/\tau_{\mathrm{step}}$) and disengagement (rate $1/\tau_d$) as competing
+Poisson processes; reverse steps are neglected, consistent with the
+Hopfield--Ninio assumption of irreversibility for the
+specificity-amplifying transitions. The probability of completing one
+activation step before disengagement is
+\begin{equation}
+  p_{\mathrm{step}}
+  \;=\; \frac{1/\tau_{\mathrm{step}}}{1/\tau_{\mathrm{step}}+1/\tau_d}
+  \;=\; \frac{\tau_d}{\tau_d + \tau_{\mathrm{step}}}.
+  \label{eq:p_step}
+\end{equation}
+The probability that a given engagement completes the full $N_A$-step
+cycle is therefore
+\begin{equation}
+  P_{\mathrm{cycle}}(\tau_d;\,N_A,\tau_{\mathrm{step}})
+  \;=\; p_{\mathrm{step}}^{\,N_A}
+  \;=\; \left(\frac{\tau_d}{\tau_d + \tau_{\mathrm{step}}}\right)^{\!N_A}.
+  \label{eq:P_cycle}
+\end{equation}
+This expression has two limits. For $\tau_d \gg N_A\,\tau_{\mathrm{step}}$,
+$P_{\mathrm{cycle}}\to 1$: every engagement realizes a full proofreading
+cycle and the Lammers framework applies as written. For $\tau_d \ll
+\tau_{\mathrm{step}}$, $P_{\mathrm{cycle}}\sim(\tau_d/\tau_{\mathrm{step}})^{N_A}$:
+no engagement realizes a cycle and the gene operates without proofreading
+specificity. The transition between these limits is sharp; for $\tau_d =
+N_A\,\tau_{\mathrm{step}}$, $P_{\mathrm{cycle}}\to 1/e$ in the large-$N_A$
+limit, locating the half-completion threshold at $\tau_d^{\mathrm{thresh}}
+\approx N_A\,\tau_{\mathrm{step}}$.
+
+\subsection{Realized specificity}
+
+Let each completed activation step impose a multiplicative discrimination
+factor~$\alpha < 1$ on noncognate vs.\ cognate firings (the
+Hopfield--Ninio amplifier). If engagements that fall off after $n<N_A$
+steps reset the proofreading chain (cognate and noncognate both equally
+discarded), the realized specificity averaged over engagements is
+\begin{equation}
+  f_{\mathrm{realized}}^{-1}
+  \;=\; \mathbb{E}\!\left[\alpha^{-(1+N_c)}\right]
+  \;=\; (1-p_{\mathrm{step}})\sum_{n=0}^{N_A-1} p_{\mathrm{step}}^{\,n}\,\alpha^{-(1+n)}
+  \;+\; p_{\mathrm{step}}^{\,N_A}\,\alpha^{-(N_A+1)},
+  \label{eq:f_realized}
+\end{equation}
+which interpolates between $f_{\mathrm{realized}}=\alpha$ for
+$\tau_d\to 0$ (no proofreading) and $f_{\mathrm{realized}}=\alpha^{N_A+1}$
+for $\tau_d\to\infty$ (full Lammers ceiling).
+
+\subsection{Coupled information rate}
+
+Engagements occur at rate $(\tau_c+\tau_d)^{-1}$. The rate of
+\emph{completed} proofreading cycles is
+\begin{equation}
+  \mathcal{R}_{\mathrm{cycle}}
+  \;=\; \frac{P_{\mathrm{cycle}}(\tau_d;N_A,\tau_{\mathrm{step}})}{\tau_c + \tau_d}.
+  \label{eq:R_cycle}
+\end{equation}
+In the high-noncognate-interference regime ($w/c \gg \alpha_{\mathrm{L}}$,
+mouse-relevant), the per-cycle information accrual is dominated by the
+specificity-controlled noise floor and scales as $f_{\mathrm{realized}}^{2}$
+\cite{Lammers2023}. The coupled effective information rate is therefore
+\begin{empheq}[box=\fbox]{equation}
+  \mathrm{IR}_{\mathrm{eff}}(\tau_c,\tau_d;N_A,\tau_{\mathrm{step}})
+  \;\propto\;
+  \underbrace{\frac{1}{\tau_c+\tau_d}}_{\text{engagement rate}}
+  \;\cdot\;
+  \underbrace{\left(\frac{\tau_d}{\tau_d+\tau_{\mathrm{step}}}\right)^{\!N_A}}_{P_{\mathrm{cycle}}}
+  \;\cdot\;
+  \underbrace{f_{\mathrm{realized}}^{\,2}(\tau_d;N_A,\alpha)}_{\text{IR per completed cycle}}.
+  \label{eq:IR_eff}
+\end{empheq}
+The naive worst-case treatment, $\mathrm{IR}_{\mathrm{eff}}=f_{\EP}\,
+\mathrm{IR}_{\mathrm{Lammers}}$ with $f_{\EP}=\tau_d/(\tau_c+\tau_d)$,
+differs from \eqref{eq:IR_eff} in the second and third factors. Both
+naive and coupled expressions agree in the saturated regime
+$\tau_d\gg N_A\tau_{\mathrm{step}}$, where $P_{\mathrm{cycle}}\to 1$ and
+$f_{\mathrm{realized}}\to\alpha^{N_A+1}$. Below saturation, the coupled
+expression collapses as $\tau_d^{N_A}$ rather than as $\tau_d$, a
+qualitatively different scaling.
+
+\subsection{Optimal dwell time}
+
+At fixed $\tau_c$ and in the saturated-specificity regime
+($f_{\mathrm{realized}}\approx\alpha^{N_A+1}$, independent of $\tau_d$),
+maximizing $\mathrm{IR}_{\mathrm{eff}}$ over $\tau_d$ via $\partial_{\tau_d}
+\ln\mathrm{IR}_{\mathrm{eff}}=0$ yields
+\begin{equation}
+  \tau_d^{*}
+  \;=\; \frac{\tau_{\mathrm{step}}(N_A-1) +
+        \sqrt{\tau_{\mathrm{step}}^{2}(N_A-1)^{2} + 4N_A\,\tau_{\mathrm{step}}\,\tau_c}}{2}.
+  \label{eq:tau_d_opt}
+\end{equation}
+Two limits clarify the structure. For rare engagements
+($\tau_c \gg N_A\tau_{\mathrm{step}}$, mouse), $\tau_d^{*}\approx
+\sqrt{N_A\,\tau_{\mathrm{step}}\,\tau_c}$: the optimal dwell is the
+geometric mean of the per-step time and the inter-contact interval. For
+frequent engagements ($\tau_c \ll N_A\tau_{\mathrm{step}}$, fly nc14
+small-$s$ regime under the Br\"uckner correction~\cite{Bruckner2023}),
+$\tau_d^{*}\approx (N_A-1)\,\tau_{\mathrm{step}}$: the optimal dwell is
+just long enough to complete one cycle. In both regimes,
+$\tau_d^{*}\gtrsim N_A\,\tau_{\mathrm{step}}$, confirming the threshold
+identified in~\eqref{eq:P_cycle}.
+
+\subsection{Mixture distributions and the cognate-site assumption}
+\label{ssec:mixture}
+
+The derivation above treats the contact dwell $\tau_d$ as exponentially
+distributed with a single mean. SMT measurements of transcription-factor
+residence times are not exponential at the population level: Garcia,
+Upadhyaya, Hager and colleagues~\cite{Garcia2021NAR}, by dividing
+measured TF survival distributions by an H2B-derived photobleaching
+kernel, showed that the photobleaching-corrected population
+residence-time distribution in living cells is power-law and is best
+described by a continuum of dissociation-rate states rather than 2--3
+discrete components. Two distributions
+must be distinguished. The \emph{per-site} dwell time at any single
+binding site is well approximated as a single exponential set by the
+site's local off-rate. The \emph{TF-perspective} residence-time
+distribution measured by SMT is a mixture of these per-site exponentials
+weighted by visitation, and is heavy-tailed at the population level even
+when each per-site dwell is exponential.
+
+The Hopfield--Ninio proofreading cycle runs to completion within one
+engagement at one site, so the per-event ceiling
+$f\to\alpha^{N_A+1}$ is set by the per-site exponential, and the
+derivation of \eqref{eq:P_cycle}--\eqref{eq:IR_eff} is unchanged at the
+single-event level. The implicit assumption underlying
+Section~\ref{sec:gated} is therefore that \emph{the long-residence
+component of the SMT distribution corresponds to TFs bound at cognate
+response elements}, while the short-residence mass reflects noncognate
+or transient binding. This identification is consistent with the
+biological expectation that high-affinity cognate sites have low
+$k_{\mathrm{off}}$ and with empirical findings that long-lived dwell-time
+states are enriched at functionally engaged target loci~\cite{Garcia2021NAR}.
+
+The EP-contact dwell $\tau_d$ that enters \eqref{eq:IR_eff} is itself a
+two-component mixture in the empirical data: a short bare-polymer
+component and a long architecturally-stabilized component
+(cohesin/CTCF-anchored loops in mouse~\cite{Gabriele2022,Mach2022};
+insulator-paired states with transcription-coupled stabilization in fly
+\cite{Chen2018}). With long-fraction $\phi$, long-component mean
+$\tau_d^{L}$, and short-component mean $\tau_d^{S}$, the cycle-completion
+probability \eqref{eq:P_cycle} averages to
+\begin{equation}
+  P_{\mathrm{cycle}}^{\mathrm{mix}}
+  \;=\; (1-\phi)\!\left(\frac{\tau_d^{S}}{\tau_d^{S}+\tau_{\mathrm{step}}}\right)^{\!N_A}
+  + \phi\!\left(\frac{\tau_d^{L}}{\tau_d^{L}+\tau_{\mathrm{step}}}\right)^{\!N_A}.
+  \label{eq:P_cycle_mix}
+\end{equation}
+For mouse parameters ($\phi\sim 0.05$, $\tau_d^{L}\sim 10^{3}$\,s,
+$\tau_d^{S}\sim 1$\,s, $N_A = 4$, $\tau_{\mathrm{step}}\sim 10$\,s), the
+short component contributes $\sim 7\times 10^{-5}$ and the long
+component contributes $\sim 0.96$, giving
+$P_{\mathrm{cycle}}^{\mathrm{mix}}\approx\phi$. The threshold result of
+Section~\ref{sec:gated} is therefore better stated as: \emph{a small
+fraction $\phi$ of EP contacts (the long-component) carries essentially
+all the proofreading}, with the operative quantity being
+$\phi\,\tau_d^{L}$ relative to $N_A\tau_{\mathrm{step}}$ rather than the
+mean $\langle\tau_d\rangle$. The biological mechanisms that we have
+described as ``extending $\tau_d$'' --- CTCF/cohesin loops, insulator
+pairing, transcription-coupled stabilization --- are mechanisms for
+\emph{generating the long-component fraction $\phi$} on top of an
+otherwise short bare-polymer distribution; they do not shift the bulk
+of the distribution, only the tail.
+
+The Berg--Purcell term in \eqref{eq:star} is, by the same distinction,
+governed by the per-site exponential at the cognate enhancer and
+retains its canonical $\delta c/c \sim T^{-1/2}$ scaling. Heavy-tailed
+TF-perspective residence enters BP only through two upstream channels:
+reduction of effective $c_{\mathrm{free}}$ by noncognate sequestration,
+and bursty, non-Poisson arrival statistics at the cognate site that
+violate the renewal assumption underlying~\eqref{eq:Nprod}. Both effects
+bias the Lammers $w/c$ ratio toward heavy-tail-fluctuating values rather
+than a single number, and should be read as additional --- not
+replacement --- corrections to the bound.
+
+\subsection{Implications}
+
+Three consequences depart materially from the additive treatment.
+
+\paragraph{Threshold rather than smooth suppression.} The naive
+$f_{\EP}$-suppression predicts that any reduction in $\tau_d$ degrades the
+Lammers term proportionally. The coupled treatment \eqref{eq:IR_eff}
+predicts a sharp threshold at $\tau_d \approx N_A\,\tau_{\mathrm{step}}$:
+above it, full Lammers performance is realized; below it, performance
+collapses as $(\tau_d/\tau_{\mathrm{step}})^{N_A}$. For $N_A\!\sim\!4$
+(mouse-relevant per~\cite{Lammers2023}), this is a $\tau_d^{4}$ collapse
+--- four orders of magnitude steeper than the linear duty-cycle scaling.
+Operating windows that look marginal under the additive bound are either
+comfortably inside or catastrophically outside the coupled bound.
+
+\paragraph{Mouse requires a long-component fraction $\phi$ specifically.}
+With $\tau_{\mathrm{step}}\sim 10$--$100$\,s and $N_A\sim 4$, the
+single-component threshold $N_A\tau_{\mathrm{step}}$ falls in the range
+$40$--$400$\,s. The empirical EP-contact dwell distribution in mouse is
+bimodal, with $\tau_d^{S}\sim 1$\,s (bare polymer) and $\tau_d^{L}\gtrsim
+10^{3}$\,s (cohesin/CTCF-anchored loops) at long-component fraction
+$\phi\sim$ a few percent~\cite{Gabriele2022,Mach2022}. By
+\eqref{eq:P_cycle_mix}, cycle completion is essentially carried by the
+long component: $P_{\mathrm{cycle}}^{\mathrm{mix}}\approx\phi$ when
+$\tau_d^{L}\gg N_A\tau_{\mathrm{step}}\gg\tau_d^{S}$. The coupled
+framework therefore identifies a quantitative reason --- beyond the
+appeal to enhancer redundancy --- why mouse \emph{requires} cohesin-
+anchored loops to make Lammers proofreading viable: not because the
+loops shift the average contact dwell, but because they generate the
+long-component tail $\phi$ that does almost all the proofreading work.
+Eliminating the loop population (acute cohesin/CTCF
+depletion~\cite{Saiz2026}) collapses $\phi\to 0$ and drives
+$P_{\mathrm{cycle}}^{\mathrm{mix}}\to (\tau_d^{S}/(\tau_d^{S}+
+\tau_{\mathrm{step}}))^{N_A}\sim 10^{-5}$, even though the mean contact
+frequency~\cite{Hsieh2022} is largely preserved. Conversely, fly nc14
+with $N_A\!\sim\!1$ has single-component threshold $\sim 10^{1}$\,s,
+already exceeded by the inactive-paired dwell
+$\tau_d^{\mathrm{off}}\sim 7$\,min reported by Chen
+\textit{et al.}~\cite{Chen2018} for the dominant component of the
+distribution; fly does not need a separate long-component to exceed
+threshold.
+
+\paragraph{Resolution of the Saiz fate-vs-morphogenesis dissociation.}
+Fate decisions are bistable threshold-crossings tolerant of
+$f_{\mathrm{realized}}$ values well below the Lammers ceiling: any
+$f_{\mathrm{realized}}>\alpha$ together with downstream multistability
+locks in the decision. Fate-relevant proofreading therefore runs at
+modest effective $N_A^{\mathrm{fate}}\sim 1$--$2$, with threshold
+$\tau_d^{\mathrm{thresh}}\sim\tau_{\mathrm{step}}\sim 10^{1}$\,s ---
+accessible to bare-polymer dwell times. Morphogenesis depends on
+quantitatively accurate transcriptional output across cells and therefore
+on full-$N_A$ proofreading, with threshold
+$\tau_d^{\mathrm{thresh}}\sim 10^{2}$--$10^{3}$\,s, accessible only with
+cohesin-anchored loops. The Saiz \textit{et al.}~\cite{Saiz2026}
+CTCF-AID phenotype --- fate intact, morphogenesis impaired --- is then
+the predicted signature of perturbing $\tau_d$ across the
+morphogenesis-relevant threshold while leaving the fate-relevant
+threshold untouched. The Shi \textit{et al.}~\cite{Shi2025} signed
+$\tau_{ij}$-shift result --- intra-TAD pairs slow down, boundary pairs
+speed up under cohesin loss --- gives the locus-by-locus structure of
+this perturbation: morphogenesis-critical genes whose enhancers sit
+inside TADs are preferentially knocked across the threshold; boundary
+genes are not. This is a sharper prediction than ``loops are dispensable
+for fate.''
+
+\paragraph{Energy efficiency and aborted cycles.} Each completed
+activation step dissipates $\sim k_BT\ln(\eta_{ab}\eta_{ua}/\eta_{ba}\eta_{ub})$
+of free energy~\cite{Lammers2023}. Aborted cycles dissipate only the
+energy of steps actually completed, not the full $N_A$-step cost. The
+information-per-energy ratio in the coupled framework is therefore
+\begin{equation}
+  \frac{\mathrm{IR}_{\mathrm{eff}}}{\Phi_{\mathrm{eff}}}
+  \;\sim\;
+  \frac{f_{\mathrm{realized}}^{\,2}\,p_{\mathrm{step}}^{N_A}}
+       {\phi_{\mathrm{step}}\,p_{\mathrm{step}}\,(1-p_{\mathrm{step}}^{N_A})/(1-p_{\mathrm{step}})},
+  \label{eq:efficiency}
+\end{equation}
+which recovers the Lammers efficiency in the saturated regime
+$\tau_d\gg N_A\tau_{\mathrm{step}}$, but for $\tau_d\sim
+\tau_{\mathrm{step}}$ exhibits a regime where partial cycles dissipate
+without producing information. This identifies a previously
+uncharacterized failure mode of biological kinetic proofreading: a
+locus with a marginal contact dwell time pays the metabolic cost of
+attempted proofreading without realizing the specificity benefit. The
+prediction is testable through paired measurements of nascent
+transcription burstiness and ATP consumption across acute cohesin
+depletion conditions.
+
+\paragraph{Caveats.} The derivation assumes (i) exponentially distributed
+contact dwell times, (ii) irreversible forward activation steps, (iii)
+that disengagement resets the proofreading chain. Reversible steps and
+partial chain memory would soften the threshold; non-exponential
+$\tau_d$ distributions (e.g., the bimodal active vs.\ inactive paired
+states of Chen \textit{et al.}~\cite{Chen2018}) require evaluating
+\eqref{eq:IR_eff} as an average over the dwell-time distribution and
+would generally favor the long-dwell tail. The coupling derived here
+should therefore be read as the leading-order treatment of an
+unavoidable interaction between two physically independent constraints,
+not as a final closed form.
+
+\section{Multi-axis fly-vs-mouse asymmetry}
+\label{sec:fly_vs_mouse}
+
+The fly-vs-mouse asymmetry, often discussed as a single tradeoff between
+equilibrium and nonequilibrium gene-circuit operation, in fact runs along
+four physically independent axes that the foregoing sections have
+introduced piecemeal. We collect them here and observe that
+Lammers~\cite{Lammers2023} and Kim \& Larson~\cite{KimLarson2025}
+implicitly conflate the first two.
+
+\paragraph{Axis~1: species discrimination at the cognate site.} Set by
+the noncognate-to-cognate \emph{species} concentration ratio $w/c$
+\cite{Lammers2023} (or equivalently $M$ in Larson's
+notation~\cite{KimLarson2025}). This is the question of how reliably a
+gene locus, when occupied, identifies which TF species is bound. Resolved
+by kinetic proofreading. Fly nc14 has $w/c\sim 47$ (low; equilibrium
+suffices); mouse early embryo has $w/c\sim 10^{3}$ (high; proofreading
+required).
+
+\paragraph{Axis~2: site discrimination by the TF.} Set by the TF-perspective
+ratio of noncognate to cognate sites in the genome,
+$\rho \equiv N_{\mathrm{noncog}}/N_{\mathrm{cog}}$. For Bicoid in fly,
+$\rho\sim 10^{2}$--$10^{3}$ (counting weak motif matches); for typical
+mammalian TFs, $\rho\sim 10^{4}$--$10^{6}$, both because the genome is
+larger and because mammalian regulatory landscapes are more permissive.
+Crucially, this axis is \emph{not} captured by $w/c$: a low-$w/c$ system
+(few competing species) still has high~$\rho$ if any single species must
+discriminate among many candidate sites. Larson~\cite{KimLarson2025}
+and Lammers~\cite{Lammers2023} elide this distinction by treating
+``few privileged TFs in fly nc14'' as a complete answer; it is in fact
+only an answer to Axis~1. The Axis~2 problem is real in fly and is
+resolved by mechanisms orthogonal to proofreading: facilitated diffusion,
+1D sliding, transcription-factor hubs/clusters that locally elevate
+$c_{\mathrm{free}}$ at active enhancers (Bcd hubs in
+fly~\cite{Mir2017,Mir2018}; Sox2/Bra clusters in mouse), and power-law
+residence-time distributions with cognate-enriched long
+tails~\cite{Garcia2021NAR}. In Eq.~\eqref{eq:star} this axis enters
+implicitly through the $c_{\mathrm{free}}$ and $D_{\mathrm{eff}}$ that
+appear in the Berg--Purcell prefactor; both are reduced relative to bulk
+values by noncognate sequestration~\cite{Mirny2009} and locally elevated
+by hub/cluster mechanisms.
+
+\paragraph{Axis~3: enhancer-to-promoter contact formation.} Set by
+chromatin polymer first-passage; entered as the $\tau_c/\tau_d$ term in
+Eq.~\eqref{eq:star} and elaborated in Sections~\ref{sec:scaling}--\ref{sec:gated}.
+Fly nc14 has short $\tau_c$ (Br\"uckner-corrected pre-TAD chromatin);
+mouse has long $\tau_c$, partly rescued by cohesin loops. Operative
+parameter: not the chromatin MSD exponent~$\alpha$ as a single number,
+but the connectivity matrix~$\mathbf{K}$ derived from the static contact
+map~\cite{Shi2025}.
+
+\paragraph{Axis~4: cycle-completion threshold.} Set by the long-component
+fraction $\phi$ of the EP-contact dwell distribution and the per-step
+activation time $\tau_{\mathrm{step}}$, via the coupled bound
+\eqref{eq:P_cycle_mix}. This axis is the mechanism by which Axes~1 and~3
+interact: even a system that has resolved both species discrimination
+($w/c$ low or proofreading available) and site discrimination
+($c_{\mathrm{free}}$ adequate locally) fails if the proofreading cycle
+cannot complete within a contact dwell. Mouse satisfies it through the
+loop-anchored long-component $\phi\sim 0.05$ generated by CTCF/cohesin;
+fly satisfies it through transcription-stabilized pairing
+\cite{Chen2018} and the small effective $N_A$ of equilibrium circuits.
+
+The four axes are dimensionally independent. A system can in principle
+sit comfortably on any subset and at the wire on the rest; empirically,
+both fly nc14 and mouse early embryo sit near the bound on \emph{all
+four} simultaneously, which is why morphogen-based developmental
+decisions are restricted to specific time windows and break down
+outside them.
+
+Lammers \textit{et al.}~\cite{Lammers2023} identify Axis~1 as the
+parameter that distinguishes fly (equilibrium-permissive) from mouse
+(energy-dissipation-required). Equation~\eqref{eq:star} adds the polymer
+axes; Section~\ref{sec:gated} couples Axes~1 and~4. The remainder of this
+section presents the joint Axis~1 + Axis~3 picture in tabular form,
+with Axes~2 and~4 entering as the prefactor on Berg--Purcell
+(noncognate sequestration / hub amplification) and the mixture-fraction
+$\phi$ on the polymer term respectively. We caution, following Shi
+\textit{et al.}~\cite{Shi2025}, that ``$\alpha$ at the readout locus'' is
+not a clean per-system number: the distribution of single-locus~$\alpha$
+within a single nucleus is broad (Shi
+\textit{et al.}~\cite{Shi2025}, Fig.~6, $\langle\alpha\rangle\approx 0.52$
+with substantial spread), and the per-locus diffusivity is anticorrelated
+with a graph-theoretic centrality $C_i = \sum_{j\neq i} r_{ij}^{-m}$
+computed from the contact map. The operative chromatin-axis parameter is
+therefore better stated as the local structure of the connectivity
+matrix~$\mathbf{K}$ at the readout locus, with $C_i$ and the eigenmode
+contributions as measurable proxies. With that caveat, each embryo lives
+at a point in the $(w/c,\,\text{chromatin axis})$ plane, and the location
+determines which constraints are tight and which mechanisms must be in
+place to satisfy them.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{p{0.18\linewidth}cc p{0.30\linewidth} p{0.28\linewidth}}
+\toprule
+System & $w/c$ & $\alpha$ at readout locus & Lammers axis (kinetic) & Polymer-FPT axis (structural) \\
+\midrule
+\textit{Drosophila} nc14 &
+$\sim 47$ &
+$\sim 0.5$ (pre-TAD~\cite{Hug2017,Ogiyama2018}) &
+Equilibrium gene circuits suffice (3--5 binding sites) &
+Single-locus $\tau_c$ short; Bcd hubs~\cite{Mir2017,Mir2018} amplify
+$c_{\mathrm{free}}$ locally \\
+\addlinespace
+Mouse early embryo &
+$\sim 10^{3}$ &
+progressively consolidating; $\sim$Rouse-like during fate decisions,
+TAD-rigid post-fate~\cite{Du2017,Ke2017,Flyamer2017,Saiz2026} &
+Energy dissipation / activator proofreading required &
+Rescued mainly by long $T$, $k$ redundant enhancers~\cite{Osterwalder2018},
+paracrine averaging over $N_{\mathrm{cells}}$~\cite{Etoc2016,Saiz2016}.
+CTCF-loop geometry is dispensable for fate specification but required for
+post-fate fine-tuning~\cite{Saiz2026,Rao2017,Hsieh2022}. \\
+\bottomrule
+\end{tabular}
+\caption{Two independent axes of fly-vs-mouse asymmetry. The Lammers
+axis~\cite{Lammers2023} measures the kinetic burden of distinguishing
+cognate from noncognate TFs. The polymer-FPT axis (this work) measures
+the structural burden of bringing enhancer and promoter into productive
+contact. Each embryo populates the bound~\eqref{eq:star} along both axes
+simultaneously.}
+\label{tab:two_axes}
+\end{table}
+
+The mouse-specific bound on the structural axis becomes, after
+multi-enhancer and paracrine rescue,
+\begin{equation}
+  \left(\frac{\delta c}{c}\right)^{\!2}_{\!\text{mouse, polymer}}
+  \;\gtrsim\;
+  \frac{\tau_c(\alpha,s_{\min},b)}{k\,T\,N_{\mathrm{cells}}},
+  \label{eq:star_mouse}
+\end{equation}
+where $s_{\min}$ is the effective intra-TAD genomic distance, $k$ is the
+number of redundant enhancers contributing in parallel, and
+$N_{\mathrm{cells}}$ is the size of the paracrine-averaged cell field. The
+mouse minimizes the polymer term by maximizing the prefactors that divide
+it; the fly minimizes~$\tau_c$ at the level of the locus itself. Each is a
+coherent solution.
+
+The two axes are independent in the sense that an embryo could in principle
+sit comfortably on one and at the wire on the other. Empirically, both fly
+nc14 and mouse early embryo appear to be at the wire on \emph{both} axes,
+which is why morphogen-based developmental decisions are restricted to
+specific time windows (early cycles in fly; defined fate-commitment
+intervals in mouse) and break down outside them.
+
+\section{Application: 2D mouse gastruloids}
+\label{sec:gastruloid}
+
+A 2D mouse gastruloid~\cite{vandenBrink2014,Beccari2018,Moris2020} starts
+as a uniform aggregate of pluripotent cells, breaks symmetry under Wnt
+activation, and acquires a Brachyury-positive pole opposite a
+Sox2-retaining domain. The morphogen gradient is not imposed but
+self-organized, through a Wnt/Nodal activator--inhibitor
+field~\cite{Muller2012,Etoc2016,Tewary2017}. The total readout-noise
+budget acquires an additional source term:
+\begin{equation}
+  \left(\tfrac{\delta c}{c}\right)^{\!2}_{\!\text{observed}}
+  =
+  \left(\tfrac{\delta c}{c}\right)^{\!2}_{\!\text{source}}
+  +
+  \left(\tfrac{\delta c}{c}\right)^{\!2}_{\!\text{propagation}}
+  +
+  \left(\tfrac{\delta c}{c}\right)^{\!2}_{\!\text{readout}},
+  \label{eq:gastruloid_decomp}
+\end{equation}
+where the readout term is~\eqref{eq:star} populated with mouse parameters.
+The gastruloid is a natural test bed for the framework because every term
+on the right is, in principle, single-molecule observable: H2B SMT
+constrains $\alpha$ and hence $\tau_c$; Sox2 and Bra SMT constrain $D_{\eff}$,
+$c_{\mathrm{free}}$, and the kinetic prefactors of the
+Lammers~\cite{Lammers2023} sharpness/precision/specificity terms; spatial
+statistics of TF bound-fractions across the gastruloid constrain the
+source structure.
+
+\subsection{Term-by-term measurement program}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{p{0.27\linewidth}p{0.30\linewidth}p{0.37\linewidth}}
+\toprule
+Observable & Term in~\eqref{eq:star} or~\eqref{eq:gastruloid_decomp} &
+What it tells you \\
+\midrule
+H2B SMT ($\alpha$, $\Gamma_\alpha$, fBM state fractions, $P_c$,
+return probability) & $\tau_c$ via~\eqref{eq:tau_c} & Whether chromatin is
+Rouse-like, crumpled, or TAD-confined; whether $\alpha$ is spatially
+patterned across the gastruloid \\
+\addlinespace
+Sox2 SMT (residence-time distribution; bound fraction; $D_{\eff}$) &
+Lammers term (precision; specificity at low $w/c$); $c_{\mathrm{free}}$
+input to BP & Pluripotency TF kinetics; baseline against which Bra is
+compared \\
+\addlinespace
+Bra SMT (residence-time distribution; bound fraction; $D_{\eff}$) &
+Lammers term at fate transition; $c_{\mathrm{free}}$ input to BP &
+Direct gastruloid analog of Bcd readout; expected bimodal residence with
+long-residence fraction tracking polarized axis \\
+\addlinespace
+Spatial autocorrelation of bound fractions across the gastruloid &
+Source structure in~\eqref{eq:gastruloid_decomp} & Reaction--diffusion
+(intrinsic Turing wavelength) vs.\ localized-source (monotonic, no
+wavelength) \\
+\addlinespace
+Position-dependent variance of Bra bound fraction across replicates &
+Relative weight of source vs.\ readout terms in
+\eqref{eq:gastruloid_decomp} & Source-dominated: variance position-
+independent. Readout-dominated: variance peaks at boundary
+(Gregor input/output decomposition) \\
+\addlinespace
+Time-resolved SMT spanning symmetry breaking & Causal ordering of TF
+kinetics and visible polarization & Whether residence-time bimodality
+precedes or follows the fate decision \\
+\bottomrule
+\end{tabular}
+\caption{Mapping single-molecule observables to terms in the compound bound
+\eqref{eq:star} and the gastruloid noise decomposition
+\eqref{eq:gastruloid_decomp}.}
+\label{tab:program}
+\end{table}
+
+\subsection{Spatial coupling of chromatin and TF readout}
+
+A distinctive feature of gastruloids, absent from fly nc14, is that
+chromatin state is itself spatially patterned by the symmetry-breaking
+event: Bra-positive cells differentiate and remodel chromatin within hours
+of polarization. Hence~$\alpha = \alpha(\mathbf{x})$ across the gastruloid,
+$\tau_c = \tau_c(\mathbf{x})$, and the gradient is in two coupled fields ---
+a TF concentration field and a chromatin-state field --- rather than one.
+Per-cell H2B fBM analysis yields~$\alpha(\mathbf{x})$ directly. A finding of
+spatially uniform~$\alpha$ reduces the system to the standard
+``TF-reads-concentration'' picture; a finding of patterned~$\alpha$
+implicates chromatin in the readout.
+
+\section{Predictions}
+\label{sec:predictions}
+
+\begin{enumerate}
+  \item \textbf{Chromatin exponent at fly readout loci.} Live two-color
+        $eve$ enhancer--promoter MSD in nc14 should yield
+        $\alpha = 0.5\pm 0.05$ with no late-time plateau, consistent with
+        Br\"uckner~\cite{Bruckner2023}. A value $\alpha\le 0.4$ would require
+        the long-range-correlation correction~\cite{Bruckner2023} to lie in
+        the favorable direction.
+
+  \item \textbf{Architectural facilitation of pairing at fly loci.} For
+        loci with EP separations comparable to or beyond \textit{eve}'s
+        142\,kb, mean pairing times in the absence of insulator-mediated
+        facilitation should match or exceed Chen \textit{et al.}'s
+        $\tau_c\!\sim\!1$\,hr~\cite{Chen2018}. Insulator deletion (e.g.\
+        $\Delta$\textit{homie}) should slow pairing further; insulator
+        substitution should restore it. Loci with shorter EP separations
+        ($\lesssim\!20$\,kb), at which Chen-style architectural
+        facilitation is unnecessary, should show pairing times
+        approaching the bare-polymer prediction with the
+        Br\"uckner~\cite{Bruckner2023} long-range-correlation correction.
+
+  \item \textbf{Transcription-stabilized dwell extension.} Two-color EP
+        tracking at fly developmental loci should resolve a bimodal
+        distribution of paired-state durations: a short component
+        (inactive paired, $\tau_d^{\mathrm{off}}\!\sim\!7$\,min) and a
+        long component (active paired, $\tau_d^{\mathrm{on}}\!\sim\!90$\,min)
+        consistent with Chen \textit{et al.}~\cite{Chen2018}. Acute
+        transcriptional inhibition (e.g.\ triptolide, $\alpha$-amanitin)
+        should ablate the long component without much affecting the
+        pairing rate, isolating the transcription-coupled dwell extension
+        from the architectural pairing mechanism.
+
+  \item \textbf{Mouse loop signature: bimodal contact-duration
+        distribution.} Two-color EP tracking at a mouse developmental
+        locus (e.g.\ \textit{Sox2}, \textit{Bra}) should show a
+        distribution of contact durations that is approximately bimodal:
+        a short-dwell component reflecting bare-polymer encounters and a
+        long-dwell component reflecting cohesin-anchored loop states with
+        $\tau_d \gtrsim \SI{e3}{\second}$~\cite{Gabriele2022}. The
+        long-dwell fraction should be small in absolute terms but
+        responsible for the bulk of productive transcription. Acute
+        cohesin or CTCF depletion~\cite{Saiz2026} should ablate the
+        long-dwell component without much affecting the short-dwell rate,
+        consistent with the observation that contacts are largely
+        preserved~\cite{Hsieh2022} but transcriptional fine-tuning is
+        lost~\cite{Saiz2026}.
+
+  \item \textbf{Mouse compensation through enhancer redundancy.} Targeted
+        deletion of subsets of redundant enhancers should degrade positional
+        precision as~$1/\sqrt{k_{\mathrm{remaining}}}$, where
+        $k_{\mathrm{remaining}}$ is the number of functional enhancers
+        contributing in parallel.
+
+  \item \textbf{Two-axis decomposition of the fly-vs-mouse split.} The
+        Lammers $w/c$ axis~\cite{Lammers2023} and the polymer-FPT $\alpha$
+        axis are independent. A hypothetical genome-edited fly with
+        artificially elevated $w/c$ but pre-TAD chromatin should fail
+        Lammers' specificity bound but pass the polymer-FPT bound; a
+        hypothetical fly with low $w/c$ but artificially TAD-consolidated
+        chromatin should pass Lammers but fail polymer-FPT. Both should
+        fail to pattern correctly, but for different molecular reasons.
+
+  \item \textbf{Gastruloid Bra residence bimodality.} pEM and saSPT
+        decomposition of Bra SMT in 2D gastruloids should yield a bimodal
+        residence-time distribution with the long-residence fraction
+        tracking position along the polarized axis.
+
+  \item \textbf{Gastruloid variance structure.} Cell-to-cell variance of
+        Bra free fraction at fixed gastruloid position should be
+        position-independent if the source dominates
+        \eqref{eq:gastruloid_decomp} and position-dependent (peaked at the
+        boundary) if the readout dominates.
+
+  \item \textbf{Gastruloid chromatin patterning.} Per-cell H2B~$\alpha$
+        should differ measurably between Bra-high and Sox2-high domains if
+        chromatin participates in the readout, and not otherwise.
+
+  \item \textbf{H2B dynamics across acute CTCF/cohesin depletion in
+        gastruloids.} The Shi--Shin--Thirumalai HIPPS-DIMES
+        framework~\cite{Shi2025} predicts that loss of cohesin reorganizes
+        the chromatin connectivity matrix~$\mathbf{K}$ --- redistributing
+        locus centralities $C_i$ and closing the low-mode gap --- while
+        leaving the local fractional-Langevin exponent~$\alpha$ largely
+        intact. The expected single-molecule signatures during the
+        48--72\,h fate-decision window are therefore (i) a modest
+        ensemble-mean increase ($\sim$20--40\%) in H2B effective
+        diffusivity~$D$ with no detectable shift in~$\alpha$; (ii) a
+        locus-by-locus $\Delta D$ that anticorrelates with the relative
+        change in centrality $C_i^{\Delta\mathrm{RAD21}}/C_i^{\mathrm{WT}}$
+        computed from matched Micro-C; (iii) a redistribution of pEM
+        state fractions reflecting the centrality reorganization, with
+        within-state~$\alpha$ preserved. This prediction is consistent
+        with Mazzocca \textit{et al.}~\cite{Mazzocca2024} MINFLUX+HILO
+        measurements (small effect on~$D$, no shift in~$\alpha$ on RAD21
+        depletion) and with pEM analyses of H2B in 3617 cells under RAD21
+        depletion that show shifted state fractions without a within-state
+        $\alpha$ shift. At 120--168\,h, when the looping function becomes
+        essential~\cite{Saiz2026}, locus mobility and pEM state weights
+        should diverge between WT and $\Delta$N-term CTCF gastruloids by a
+        larger margin. A finding that within-state~$\alpha$ drops sharply
+        at 48--72\,h under cohesin or CTCF loss would contradict both
+        Mazzocca \textit{et al.}~\cite{Mazzocca2024} and the HIPPS-DIMES
+        prediction, and force a revision of the mouse-side picture.
+
+  \item \textbf{Signed locus-specific~$\tau$ change inside vs.\ at TAD
+        boundaries.} Shi \textit{et al.}~\cite{Shi2025} predict that
+        cohesin depletion changes the two-point relaxation
+        time~$\tau_{ij}$ in opposite directions for intra-TAD pairs (slower,
+        because $\langle r_{ij}\rangle$ grows) and TAD-boundary pairs
+        (faster). Two-color EP tracking in CTCF-AID or RAD21-AID
+        gastruloids should resolve this signed, locus-specific shift. The
+        prediction is consistent with the Saiz \textit{et al.}
+        morphogenesis-vs-fate dissociation~\cite{Saiz2026}: morphogenetic
+        precision degrades because $\tau_c$ is differentially detuned
+        across loci, not because $\tau_c$ uniformly worsens, while
+        time-averaged contact probabilities (and therefore
+        threshold-crossing fate decisions) remain robust.
+
+  \item \textbf{Bra/Sox2 residence times across CTCF depletion.} Bra and
+        Sox2 SMT in CTCF-AID gastruloids should show comparable residence-
+        time distributions and bound fractions at 48--72\,h with and
+        without CTCF, given that fate specification is preserved. Any
+        appreciable difference would localize the early CTCF requirement
+        to TF binding kinetics rather than to specific gene
+        regulation~\cite{Saiz2026}.
+
+  \item \textbf{Substrate stiffness as a knob on $\tau_c$.} Stiffer
+        substrates should lower~$\alpha(\mathrm{H2B})$, raise~$\tau_c$, and
+        degrade boundary precision in proportion to~\eqref{eq:star_mouse}.
+        Boundary precision unchanged by stiffness implies the readout
+        operates with margin on the polymer axis (the Lammers axis may still
+        be tight).
+\end{enumerate}
+
+\section{Discussion}
+
+The Gregor 2007 result was that \textit{Drosophila} development reads
+positional information at the Berg--Purcell limit. Lammers \textit{et al.}
+2023 added that the same readout is bounded by a kinetic precision/
+sharpness/specificity tradeoff, with fly and mouse on opposite sides of the
+$w/c$ axis. The polymer-revised statement here adds a third constraint of
+comparable weight: chromatin first-passage time. The three constraints are
+physically independent --- diffusive counting (Berg--Purcell), gene-circuit
+kinetics under noncognate interference (Lammers), and polymer first-passage
+(this work) --- and a developmental readout must satisfy all three
+simultaneously. The Xiao--Hafner--Boettiger~\cite{Xiao2021} futile-cycle
+amplifier sits downstream as a high-gain decoder that converts small
+systematic differences (in $c$ or in $\tau_c$) into sharp transcriptional
+responses, while equally amplifying any residual stochastic noise; the
+biology lives in the regime where signal-amplification mechanisms operate
+on inputs whose stochastic component has been independently suppressed.
+
+\textit{Drosophila} nc14 satisfies all three because $w/c$ is low,
+chromatin is pre-TAD with $\alpha\!\approx\!0.5$, and the syncytium permits
+spatial averaging. Mouse early embryos satisfy all three through entirely
+different mechanisms: energy dissipation rescues the Lammers term;
+multi-enhancer redundancy and paracrine averaging rescue the polymer term;
+hours-scale fate-commitment integration windows accommodate the residual
+Berg--Purcell term; and the futile-cycle gain~\cite{Xiao2021} converts the
+small intra-TAD vs.\ inter-TAD contact-frequency differences into the
+$\sim$10-fold expression boundaries actually observed. The 2D gastruloid
+offers the cleanest experimental setting in which to measure each term
+independently, because the geometry is finite, the chromatin is mammalian,
+the symmetry-breaking event is controllable, and every term
+in~\eqref{eq:star} except $\tau_c$ itself is single-molecule observable.
+
+\paragraph{Caveats.} The bound~\eqref{eq:star} assumes the renewal
+approximation for EP contacts and weak correlation between TF occupancy and
+contact events. The polymer scaling~\eqref{eq:tau_c} assumes equilibrium
+fractional Langevin dynamics; non-equilibrium driving (cohesin loop
+extrusion, RNA Pol II--mediated stiffening) violates~\eqref{eq:tau_c} and
+is plausibly the origin of the Br\"uckner~\cite{Bruckner2023} long-range
+correlations. We do \emph{not} invoke condensate-mediated capture as a
+mechanism: while Sox2 and other developmental TFs form transient
+clusters, direct evidence that condensation reduces $\tau_c$ in a
+fate-relevant way is lacking. The role of structural loops in setting
+$\tau_c$ is also weaker than the rigid-TAD interpretation suggests: acute
+cohesin and CTCF
+perturbations~\cite{Rao2017,Schwarzer2017,Hsieh2022,Saiz2026} preserve
+substantial EP contact frequency and, in gastruloids, preserve fate
+specification entirely. Shi \textit{et al.}~\cite{Shi2025} sharpen this
+picture: the rapid, locus-specific dynamics that distinguishes WT
+chromatin from a polymer-shuffled control is encoded in the
+\emph{full} static contact map (the connectivity matrix~$\mathbf{K}$
+derivable from Micro-C), not in CTCF loops alone. The framework is
+therefore most useful when read as constraining the static
+contact-map-derived dynamics --- captured empirically by per-cell H2B SMT
+diffusivity together with matched Micro-C-derived locus centralities,
+and consistent with the Mazzocca \textit{et al.}~\cite{Mazzocca2024}
+finding that within-state~$\alpha$ is preserved under cohesin loss while
+$D$ shifts modestly --- rather than as constraining the engineered loop
+topology imposed by CTCF/cohesin specifically. The formal coupling between the
+Lammers term and the polymer term --- in particular, whether locus
+localization to general transcription machinery should enter as a separate
+$\tau_c$ or as an additional Lammers activation step~\cite{Lammers2023} ---
+is left for future work.
+
+\begin{thebibliography}{99}
+
+\bibitem{Lammers2023}
+N.~C.~Lammers, A.~I.~Flamholz, H.~G.~Garcia. ``Competing constraints shape
+the nonequilibrium limits of cellular decision-making.''
+\textit{PNAS} \textbf{120}, e2211203120 (2023).
+
+\bibitem{Bruckner2023}
+D.~B.~Br\"uckner, H.~Chen, L.~Barinov, B.~Zoller, T.~Gregor. ``Stochastic
+motion and transcriptional dynamics of pairs of distal DNA loci on a
+compacted chromosome.'' \textit{Science} \textbf{380}, 1357--1362 (2023).
+
+\bibitem{Shi2025}
+G.~Shi, S.~Shin, D.~Thirumalai. ``Static three-dimensional structures
+determine fast dynamics between distal loci pairs in interphase
+chromosomes.'' \textit{bioRxiv} 2025.01.16.633484 (2025).
+
+\bibitem{Garcia2021NAR}
+D.~A.~Garcia, G.~Fettweis, D.~M.~Presman, V.~Paakinaho, C.~Jarzynski,
+A.~Upadhyaya, G.~L.~Hager. ``Power-law behavior of transcription factor
+dynamics at the single-molecule level implies a continuum of affinities.''
+\textit{Nucleic Acids Research} \textbf{49}, 6605--6620 (2021).
+
+\bibitem{KimLarson2025}
+J.~M.~Kim, D.~R.~Larson. ``Timing is everything: transcription bursting
+in development.'' \textit{Genes \& Development} \textbf{39}, 995--1011
+(2025).
+
+\bibitem{Mazzocca2024}
+M.~Mazzocca \textit{et al.} ``Live-cell MINFLUX and HILO imaging of
+histone H2B dynamics under acute cohesin depletion.'' (Hansen lab,
+\textit{ref.\ to be completed}).
+
+\bibitem{Lucas2018}
+T.~Lucas, H.~Tran, C.~A.~Perez Romero, A.~Guillou, C.~Fradin, M.~Coppey,
+A.~M.~Walczak, N.~Dostatni. ``3 minutes to precisely measure morphogen
+concentration.'' \textit{PLoS Genetics} \textbf{14}, e1007676 (2018).
+
+\bibitem{Chen2018}
+H.~Chen, M.~Levo, L.~Barinov, M.~Fujioka, J.~B.~Jaynes, T.~Gregor.
+``Dynamic interplay between enhancer--promoter topology and gene
+activity.'' \textit{Nat.\ Genet.} \textbf{50}, 1296--1303 (2018).
+
+\bibitem{Bothma2014}
+J.~P.~Bothma \textit{et al.} ``Dynamic regulation of \textit{eve} stripe~2
+expression reveals transcriptional bursts in living \textit{Drosophila}
+embryos.'' \textit{PNAS} \textbf{111}, 10598--10603 (2014).
+
+\bibitem{Lammers2020}
+N.~C.~Lammers \textit{et al.} ``Multimodal transcriptional control of
+pattern formation in embryonic development.''
+\textit{PNAS} \textbf{117}, 836--847 (2020).
+
+\bibitem{Saiz2026}
+N.~Alonso Saiz, M.~Martinovic, M.~Rubio, P.~Samal, S.~Giselbrecht,
+L.~Braccioli, E.~de Wit. ``A dual role for CTCF in development.''
+\textit{bioRxiv} 2026.03.17.712290 (2026).
+
+\bibitem{Rao2017}
+S.~S.~P.~Rao \textit{et al.} ``Cohesin loss eliminates all loop domains.''
+\textit{Cell} \textbf{171}, 305--320 (2017).
+
+\bibitem{Schwarzer2017}
+W.~Schwarzer \textit{et al.} ``Two independent modes of chromatin
+organization revealed by cohesin removal.''
+\textit{Nature} \textbf{551}, 51--56 (2017).
+
+\bibitem{Hsieh2022}
+T.-H.~S.~Hsieh \textit{et al.} ``Enhancer--promoter interactions and
+transcription are largely maintained upon acute loss of CTCF, cohesin,
+WAPL or YY1.'' \textit{Nat.\ Genet.} \textbf{54}, 1919--1932 (2022).
+
+\bibitem{Xiao2021}
+J.~Y.~Xiao, A.~Hafner, A.~N.~Boettiger. ``How subtle changes in 3D
+structure can create large changes in transcription.''
+\textit{eLife} \textbf{10}, e64320 (2021).
+
+\bibitem{Kaizu2014}
+K.~Kaizu, W.~de Ronde, J.~Paijmans, K.~Takahashi, F.~Tostevin,
+P.~R.~ten Wolde. ``The Berg--Purcell limit revisited.''
+\textit{Biophysical J.} \textbf{106}, 976--985 (2014).
+
+\bibitem{Gregor2007a}
+T.~Gregor, D.~W.~Tank, E.~F.~Wieschaus, W.~Bialek. ``Probing the limits to
+positional information.'' \textit{Cell} \textbf{130}, 153--164 (2007).
+
+\bibitem{Gregor2007b}
+T.~Gregor, E.~F.~Wieschaus, A.~P.~McGregor, W.~Bialek, D.~W.~Tank.
+``Stability and nuclear dynamics of the Bicoid morphogen gradient.''
+\textit{Cell} \textbf{130}, 141--152 (2007).
+
+\bibitem{Bialek2005}
+W.~Bialek, S.~Setayeshgar. ``Physical limits to biochemical signaling.''
+\textit{PNAS} \textbf{102}, 10040--10045 (2005).
+
+\bibitem{Amitai2013}
+A.~Amitai, D.~Holcman. ``Polymer model with long-range interactions.''
+\textit{Phys.\ Rev.\ E} \textbf{88}, 052604 (2013).
+
+\bibitem{Guerin2016}
+T.~Gu\'erin, O.~B\'enichou, R.~Voituriez. ``Mean first-passage times of
+non-Markovian random walkers in confinement.'' \textit{Nature} \textbf{534},
+356--359 (2016).
+
+\bibitem{Gabriele2022}
+M.~Gabriele \textit{et al.} ``Dynamics of CTCF- and cohesin-mediated
+chromatin looping revealed by live-cell imaging.''
+\textit{Science} \textbf{376}, 496--501 (2022).
+
+\bibitem{Mach2022}
+P.~Mach \textit{et al.} ``Cohesin and CTCF control the dynamics of
+chromosome folding.'' \textit{Nat.\ Genet.} \textbf{54}, 1907--1918 (2022).
+
+\bibitem{Mir2017}
+M.~Mir \textit{et al.} ``Dense Bicoid hubs accentuate binding along the
+morphogen gradient.'' \textit{Genes \& Dev.} \textbf{31}, 1784--1794 (2017).
+
+\bibitem{Mir2018}
+M.~Mir \textit{et al.} ``Dynamic multifactor hubs interact transiently with
+sites of active transcription in \textit{Drosophila} embryos.''
+\textit{eLife} \textbf{7}, e40497 (2018).
+
+\bibitem{Hug2017}
+C.~B.~Hug, A.~G.~Grimaldi, K.~Kruse, J.~M.~Vaquerizas. ``Chromatin
+architecture emerges during zygotic genome activation independent of
+transcription.'' \textit{Cell} \textbf{169}, 216--228 (2017).
+
+\bibitem{Ogiyama2018}
+Y.~Ogiyama, B.~Schuettengruber, G.~L.~Papadopoulos, J.-M.~Chang,
+G.~Cavalli. ``Polycomb-dependent chromatin looping contributes to gene
+silencing during \textit{Drosophila} development.''
+\textit{Mol.\ Cell} \textbf{71}, 73--88 (2018).
+
+\bibitem{Du2017}
+Z.~Du \textit{et al.} ``Allelic reprogramming of 3D chromatin architecture
+during early mammalian development.'' \textit{Nature} \textbf{547},
+232--235 (2017).
+
+\bibitem{Ke2017}
+Y.~Ke \textit{et al.} ``3D chromatin structures of mature gametes and
+structural reprogramming during mammalian embryogenesis.''
+\textit{Cell} \textbf{170}, 367--381 (2017).
+
+\bibitem{Flyamer2017}
+I.~M.~Flyamer \textit{et al.} ``Single-nucleus Hi-C reveals unique chromatin
+reorganization at oocyte-to-zygote transition.''
+\textit{Nature} \textbf{544}, 110--114 (2017).
+
+\bibitem{Osterwalder2018}
+M.~Osterwalder \textit{et al.} ``Enhancer redundancy provides phenotypic
+robustness in mammalian development.''
+\textit{Nature} \textbf{554}, 239--243 (2018).
+
+\bibitem{Saiz2016}
+N.~Saiz \textit{et al.} ``Asynchronous fate decisions by single cells
+collectively ensure consistent lineage composition in the mouse blastocyst.''
+\textit{Nat.\ Commun.} \textbf{7}, 13463 (2016).
+
+\bibitem{Etoc2016}
+F.~Etoc \textit{et al.} ``A balance between secreted inhibitors and edge
+sensing controls gastruloid self-organization.''
+\textit{Dev.\ Cell} \textbf{39}, 302--315 (2016).
+
+\bibitem{Muller2012}
+P.~M\"uller \textit{et al.} ``Differential diffusivity of Nodal and Lefty
+underlies a reaction-diffusion patterning system.''
+\textit{Science} \textbf{336}, 721--724 (2012).
+
+\bibitem{Tewary2017}
+M.~Tewary \textit{et al.} ``A stepwise model of reaction-diffusion and
+positional information governs self-organized human peri-gastrulation-like
+patterning.'' \textit{Development} \textbf{144}, 4298--4312 (2017).
+
+\bibitem{vandenBrink2014}
+S.~C.~van den Brink \textit{et al.} ``Symmetry breaking, germ layer
+specification and axial organisation in aggregates of mouse embryonic stem
+cells.'' \textit{Development} \textbf{141}, 4231--4242 (2014).
+
+\bibitem{Beccari2018}
+L.~Beccari \textit{et al.} ``Multi-axial self-organization properties of
+mouse embryonic stem cells into gastruloids.''
+\textit{Nature} \textbf{562}, 272--276 (2018).
+
+\bibitem{Moris2020}
+N.~Moris \textit{et al.} ``An in vitro model of early anteroposterior
+organization during human development.''
+\textit{Nature} \textbf{582}, 410--415 (2020).
+
+\end{thebibliography}
+
+\end{document}

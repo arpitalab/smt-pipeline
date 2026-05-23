@@ -15,6 +15,7 @@
   <a href="fbm_analysis.html">fBM</a>
   <a href="rl_analysis.html">RL</a>
   <a href="pem_analysis.html">pEM</a>
+  <a href="saspt_analysis.html">saSPT</a>
   <a href="lifetime.html">Lifetime &amp; DACF</a>
   <a href="track_filtering.html">Filtering</a>
   <a href="struct_options.html">Struct Options</a>
@@ -29,7 +30,8 @@
 MATLAB toolbox for single-molecule tracking (SMT) analysis built around
 <code>TrajectoryCollection</code> and <code>TrajectoryWrapper</code>.
 Trajectories are loaded from CSV files or SMD objects and flow into MSD,
-Richardson-Lucy, Bayesian diffusivity, fBM maximum-likelihood, and lifetime analyses.
+Richardson-Lucy, Bayesian diffusivity (pEMv2), state-array SPT (saSPT),
+fBM maximum-likelihood, and lifetime analyses.
 </p>
 
 <!-- ═══════════════════════════════════════════════════════════════════════ -->
@@ -44,12 +46,13 @@ Richardson-Lucy, Bayesian diffusivity, fBM maximum-likelihood, and lifetime anal
                     ▼
           TrajectoryCollection       ← aggregate N wrappers / conditions
                     │
-          ┌─────────┼──────────────────────────────────┐
-          ▼         ▼              ▼           ▼        ▼
-        getMSD  getRLDecomp  getBayesian  getFBMParam  getLifetime
-        plotMSD  getFBMByRL   Diffusivity  getFBMAlpha   computeDACF
-               plotRLDecomp  computeBootCI plotFBMFit
-                              plotpEMstats</code></pre>
+          ┌─────────┼──────────────────────────────────────────────┐
+          ▼         ▼              ▼           ▼         ▼          ▼
+        getMSD  getRLDecomp  getBayesian  getFBMParam  getState   getLifetime
+        plotMSD  getFBMByRL   Diffusivity  getFBMAlpha ArrayPost   computeDACF
+               plotRLDecomp  computeBootCI plotFBMFit  +Bootstrap
+                              plotpEMstats             compareState
+                                                       ArrayPosteriors</code></pre>
 
 <!-- ═══════════════════════════════════════════════════════════════════════ -->
 <h2>Quick start</h2>
@@ -168,6 +171,26 @@ tc.computeBootstrapCI('nBoot',200);</code></pre>
       <td><code>plotpEMstats</code></td>
       <td><a href="pem_analysis.html#plot">pEM</a></td>
       <td>Per-state MSD plots from pEM classification.</td>
+    </tr>
+    <tr>
+      <td><code>getStateArrayPosterior</code></td>
+      <td><a href="saspt_analysis.html">saSPT</a></td>
+      <td>Non-parametric variational-Bayes posterior over a 2-D <code>(D, σ<sub>loc</sub>)</code> grid (Heckert et al. 2022).</td>
+    </tr>
+    <tr>
+      <td><code>getStateArrayPosteriorBootstrap</code></td>
+      <td><a href="saspt_analysis.html#bootstrap">saSPT</a></td>
+      <td>FOV / cell / chunk cluster-bootstrap CIs on the marginal <code>D</code> posterior.</td>
+    </tr>
+    <tr>
+      <td><code>plotStateArrayPosteriorD</code> / <code>plotStateArrayPosterior2D</code></td>
+      <td><a href="saspt_analysis.html#plot">saSPT</a></td>
+      <td>Marginal-D line plot (with CI shading) and joint <code>(D, σ<sub>loc</sub>)</code> heatmap.</td>
+    </tr>
+    <tr>
+      <td><code>compareStateArrayPosteriors</code></td>
+      <td><a href="saspt_analysis.html#compare">saSPT</a></td>
+      <td>Two-condition comparison: Wasserstein-1, JS divergence, slow/fast-fraction differences with paired-bootstrap CIs.</td>
     </tr>
     <tr>
       <td><code>getLifetime</code></td>

@@ -40,6 +40,8 @@ addParameter(p, 'verbose', true, @islogical);
 addParameter(p, 'parallel', false, @islogical);
 addParameter(p, 'resampleLevel', 'subtracks', ...
     @(x) ismember(x, {'subtracks','parent'}));
+addParameter(p, 'MinPP',   0, @isnumeric);   % min max-posterior for confident assignment
+addParameter(p, 'DeltaPP', 0, @isnumeric);   % min gap between top two posteriors
 parse(p, varargin{:});
 opts = p.Results;
 
@@ -61,10 +63,22 @@ P_opt = P_opt(ord);
 % Compute point-estimate hard-assignment fractions
 posteriorProb = results.posteriorProb;  % nTracks x K
 posteriorProb = posteriorProb(:,ord);   % apply same sort order
-[~, assignment] = max(posteriorProb, [], 2);
+[max_pp, assignment] = max(posteriorProb, [], 2);
 point_hardP = zeros(1, K);
 for k = 1:K
     point_hardP(k) = sum(assignment == k) / nTracks;
+end
+
+% Confident-assignment fractions (optional; defaults reproduce hardP)
+sort_pp  = sort(posteriorProb, 2, 'descend');
+delta_pp = sort_pp(:,1) - sort_pp(:,2);
+pt_conf  = max_pp >= opts.MinPP & delta_pp >= opts.DeltaPP;
+point_confFrac  = sum(pt_conf) / nTracks;
+point_hardPConf = zeros(1, K);
+if any(pt_conf)
+    for k = 1:K
+        point_hardPConf(k) = sum(assignment == k & pt_conf) / sum(pt_conf);
+    end
 end
 
 % Fit point-estimate biophysical parameters
@@ -88,8 +102,10 @@ boot_vacf  = NaN(opts.nBoot, K, numFeatures);
 boot_D     = NaN(opts.nBoot, K);
 boot_sigma = NaN(opts.nBoot, K);
 boot_extra = NaN(opts.nBoot, K);  % alpha or L
-boot_hardP = NaN(opts.nBoot, K);
-valid      = false(opts.nBoot, 1);
+boot_hardP     = NaN(opts.nBoot, K);
+boot_hardPConf = NaN(opts.nBoot, K);
+boot_confFrac  = NaN(opts.nBoot, 1);
+valid          = false(opts.nBoot, 1);
 
 % EM parameters (only converged and maxiter needed by EM.m)
 emParams.converged = params.converged;
@@ -122,6 +138,8 @@ end
 covModel_b = opts.covModel;
 nRandomStarts_b = opts.nRandomStarts;
 resampleLevel_b = opts.resampleLevel;
+minPP_b   = opts.MinPP;
+deltaPP_b = opts.DeltaPP;
 verbose_b = opts.verbose && ~useParallel;  % suppress per-iteration output in parfor
 
 % Bootstrap loop (parfor or for)
@@ -138,10 +156,12 @@ if useParallel
     end
     parfor b = 1:nBoot_
         [boot_P(b,:), boot_vacf(b,:,:), boot_D(b,:), boot_sigma(b,:), ...
-            boot_extra(b,:), boot_hardP(b,:), valid(b)] = ...
+            boot_extra(b,:), boot_hardP(b,:), boot_hardPConf(b,:), ...
+            boot_confFrac(b), valid(b)] = ...
             run_one_bootstrap(b, deltaX, trackInfo, vacf_opt, P_opt, ...
             emParams, K, nTracks, numFeatures, dt, R, ...
-            nRandomStarts_b, covModel_b, resampleLevel_b, parentGroups, false);
+            nRandomStarts_b, covModel_b, resampleLevel_b, parentGroups, ...
+            minPP_b, deltaPP_b, false);
         if doVerbose, send(dq, b); end
     end
     if doVerbose
@@ -153,21 +173,25 @@ else
             fprintf('Bootstrap %d/%d ...', b, opts.nBoot);
         end
         [boot_P(b,:), boot_vacf(b,:,:), boot_D(b,:), boot_sigma(b,:), ...
-            boot_extra(b,:), boot_hardP(b,:), valid(b)] = ...
+            boot_extra(b,:), boot_hardP(b,:), boot_hardPConf(b,:), ...
+            boot_confFrac(b), valid(b)] = ...
             run_one_bootstrap(b, deltaX, trackInfo, vacf_opt, P_opt, ...
             emParams, K, nTracks, numFeatures, dt, R, ...
-            nRandomStarts_b, covModel_b, resampleLevel_b, parentGroups, verbose_b);
+            nRandomStarts_b, covModel_b, resampleLevel_b, parentGroups, ...
+            minPP_b, deltaPP_b, verbose_b);
     end
 end
 
 % Extract valid samples
-nGood     = sum(valid);
-goodP     = boot_P(valid,:);
-goodD     = boot_D(valid,:);
-goodSigma = boot_sigma(valid,:);
-goodExtra = boot_extra(valid,:);
-goodHardP = boot_hardP(valid,:);
-goodVacf  = boot_vacf(valid,:,:);
+nGood         = sum(valid);
+goodP         = boot_P(valid,:);
+goodD         = boot_D(valid,:);
+goodSigma     = boot_sigma(valid,:);
+goodExtra     = boot_extra(valid,:);
+goodHardP     = boot_hardP(valid,:);
+goodHardPConf = boot_hardPConf(valid,:);
+goodConfFrac  = boot_confFrac(valid);
+goodVacf      = boot_vacf(valid,:,:);
 
 % Percentile CI bounds
 lo = opts.alpha/2 * 100;
@@ -183,6 +207,22 @@ ciResults.hardP.point     = point_hardP;
 ciResults.hardP.ci_lo     = prctile(goodHardP, lo);
 ciResults.hardP.ci_hi     = prctile(goodHardP, hi);
 ciResults.hardP.boot_dist = goodHardP;
+
+% Confident-assignment composition (composition among subtracks passing
+% MinPP/DeltaPP). Equals hardP when thresholds are 0.
+ciResults.hardP_conf.point     = point_hardPConf;
+ciResults.hardP_conf.ci_lo     = prctile(goodHardPConf, lo);
+ciResults.hardP_conf.ci_hi     = prctile(goodHardPConf, hi);
+ciResults.hardP_conf.boot_dist = goodHardPConf;
+
+% Fraction of subtracks that pass the confidence thresholds (QC scalar).
+ciResults.confFrac.point     = point_confFrac;
+ciResults.confFrac.ci_lo     = prctile(goodConfFrac, lo);
+ciResults.confFrac.ci_hi     = prctile(goodConfFrac, hi);
+ciResults.confFrac.boot_dist = goodConfFrac;
+
+ciResults.MinPP   = opts.MinPP;
+ciResults.DeltaPP = opts.DeltaPP;
 
 ciResults.D.point     = point_D;
 ciResults.D.ci_lo     = prctile(goodD, lo);
@@ -235,19 +275,22 @@ end
 
 
 %% Helper: run a single bootstrap replicate (parfor-compatible, no continue)
-function [bP, bVacf, bD, bSigma, bExtra, bHardP, bValid] = ...
+function [bP, bVacf, bD, bSigma, bExtra, bHardP, bHardPConf, bConfFrac, bValid] = ...
         run_one_bootstrap(~, deltaX, trackInfo, vacf_opt, P_opt, ...
         emParams, K, nTracks, numFeatures, dt, R, ...
-        nRandomStarts, covModel, resampleLevel, parentGroups, verbose)
+        nRandomStarts, covModel, resampleLevel, parentGroups, ...
+        minPP, deltaPP, verbose)
 
     % Default: invalid replicate (NaN storage)
-    bP     = NaN(1, K);
-    bVacf  = NaN(K, numFeatures);
-    bD     = NaN(1, K);
-    bSigma = NaN(1, K);
-    bExtra = NaN(1, K);
-    bHardP = NaN(1, K);
-    bValid = false;
+    bP         = NaN(1, K);
+    bVacf      = NaN(K, numFeatures);
+    bD         = NaN(1, K);
+    bSigma     = NaN(1, K);
+    bExtra     = NaN(1, K);
+    bHardP     = NaN(1, K);
+    bHardPConf = NaN(1, K);
+    bConfFrac  = NaN;
+    bValid     = false;
 
     % Resample
     if strcmp(resampleLevel, 'parent')
@@ -322,20 +365,34 @@ function [bP, bVacf, bD, bSigma, bExtra, bHardP, bValid] = ...
     % Compute hard-assignment fractions from posterior
     dim = size(bestG, 3);
     postProb = sum(bestG, 3) / dim;  % nBoot x K (matches pEM.m line 64)
-    [~, asgn] = max(postProb, [], 2);
+    [maxPP, asgn] = max(postProb, [], 2);
     tmpHardP = zeros(1, K);
     for k = 1:K
         tmpHardP(k) = sum(asgn == k) / nBoot;
     end
 
+    % Confident-assignment fractions (threshold-gated subset)
+    sortPP  = sort(postProb, 2, 'descend');
+    deltaP  = sortPP(:,1) - sortPP(:,2);
+    conf    = maxPP >= minPP & deltaP >= deltaPP;
+    tmpConfFrac  = sum(conf) / nBoot;
+    tmpHardPConf = zeros(1, K);
+    if any(conf)
+        for k = 1:K
+            tmpHardPConf(k) = sum(asgn == k & conf) / sum(conf);
+        end
+    end
+
     % All steps succeeded — store results
-    bP     = bestP;
-    bVacf  = bestV;
-    bD     = tmpD;
-    bSigma = tmpSigma;
-    bExtra = tmpExtra;
-    bHardP = tmpHardP;
-    bValid = true;
+    bP         = bestP;
+    bVacf      = bestV;
+    bD         = tmpD;
+    bSigma     = tmpSigma;
+    bExtra     = tmpExtra;
+    bHardP     = tmpHardP;
+    bHardPConf = tmpHardPConf;
+    bConfFrac  = tmpConfFrac;
+    bValid     = true;
 
     if verbose, fprintf(' done\n'); end
 end
@@ -369,6 +426,11 @@ function display_results(ci, K, opts)
     fprintf('BOOTSTRAP CONFIDENCE INTERVALS (%d%% CI, %d/%d valid resamples)\n', ...
         round((1-opts.alpha)*100), ci.nGood, opts.nBoot);
     fprintf('Covariance model: %s  |  Resample level: %s\n', ci.covModel, ci.resampleLevel);
+    thresholdsOn = (opts.MinPP > 0) || (opts.DeltaPP > 0);
+    if thresholdsOn
+        fprintf('Confidence gate: MinPP=%.2f, DeltaPP=%.2f  |  confFrac=%.3f [%.3f, %.3f]\n', ...
+            opts.MinPP, opts.DeltaPP, ci.confFrac.point, ci.confFrac.ci_lo, ci.confFrac.ci_hi);
+    end
     fprintf('==================================================================\n');
     for k = 1:K
         fprintf('\nState %d:\n', k);
@@ -376,6 +438,10 @@ function display_results(ci, K, opts)
             ci.P.point(k), ci.P.ci_lo(k), ci.P.ci_hi(k));
         fprintf('  P     = %.4f  [%.4f, %.4f]  (hard assignment)\n', ...
             ci.hardP.point(k), ci.hardP.ci_lo(k), ci.hardP.ci_hi(k));
+        if thresholdsOn
+            fprintf('  P     = %.4f  [%.4f, %.4f]  (confident-only)\n', ...
+                ci.hardP_conf.point(k), ci.hardP_conf.ci_lo(k), ci.hardP_conf.ci_hi(k));
+        end
         fprintf('  D     = %.4f  [%.4f, %.4f] um^2/s\n', ...
             ci.D.point(k), ci.D.ci_lo(k), ci.D.ci_hi(k));
         if strcmp(opts.covModel, 'fBM')

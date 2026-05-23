@@ -1,0 +1,130 @@
+\documentclass[11pt]{article}
+
+\usepackage[letterpaper,margin=0.5in]{geometry}
+\usepackage[scaled]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{ulem}
+\normalem
+
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+\pagestyle{empty}
+
+\begin{document}
+
+\textbf{Background.} Cellular decisions in development, immunity and
+disease are made under stringent physical constraints. In a foundational
+analysis of the \textit{Drosophila} Bicoid morphogen gradient, Gregor
+\textit{et al.} (\textit{Cell}, 2007) showed that the early embryo
+positions the \textit{hunchback} expression boundary at $\sim$1\%
+egg-length precision, saturating the Berg--Purcell diffusion-limited bound
+on concentration sensing within the available 3-min nuclear-cycle-14
+window. The readout machinery sits at the physical floor. This finding is
+deep, but it leaves out everything between transcription factor (TF)
+binding and a productive transcriptional burst. The ``receptor'' for
+transcriptional output is not a fixed binding site but a productive
+enhancer--promoter (EP) contact, and EP contact statistics are set by
+chromatin polymer dynamics, not by TF diffusion. Recent quantitative
+measurements have made the gap concrete. \textbf{Chen et al.} (Gregor
+lab, \textit{Nat. Genet.}, 2018) tracked EP topology and transcription
+simultaneously at the \textit{eve} locus and identified three distinct
+states with very different timescales: open/distal (the bulk),
+inactive-paired ($\sim$7-min dwell), and active-paired ($\sim$90-min
+dwell). The transition into the paired state is roughly eight-fold slower
+than naive polymer first-passage predicts; transcription itself stabilizes
+the paired state by an order of magnitude; and a competing reporter
+nearby produces adult patterning defects. \textbf{Gabriele et al.}
+(Hansen lab, \textit{Science}, 2022) measured CTCF/cohesin loop lifetimes
+of tens of minutes in mESCs, occupied only a few percent of the cell
+cycle. \textbf{Saiz et al.} (de Wit lab, \textit{bioRxiv}, 2026) used
+auxin-degron CTCF depletion in mouse gastruloids to show that fate
+specification is preserved without CTCF looping but morphogenesis fails,
+and post-fate fine-tuning of expression collapses. \textbf{Lammers et
+al.} (Garcia lab, \textit{PNAS}, 2023) derived an information-rate bound
+on transcriptional decisions limited by a precision/sharpness/specificity
+tradeoff against noncognate-factor interference, with fly and mouse on
+opposite sides of this kinetic axis. Together, these results imply that
+mammalian fate decisions are constrained by three physically independent
+sources of noise --- (i) Berg--Purcell counting of TF molecules,
+(ii) the Lammers kinetic-proofreading tradeoff, and (iii) a chromatin
+polymer first-passage and dwell-time tradeoff that determines whether
+productive EP contacts occur often enough \emph{and} last long enough for
+transcription to fire. \textbf{Which of these is rate-limiting in
+mammalian development is not known.}
+
+\textbf{Innovation.} \uline{The overall vision of the Upadhyaya lab is to
+combine single-molecule imaging, quantitative image analysis, and
+statistical-physics-based modeling with cell-biological and genomic
+approaches to elucidate the biophysical principles underlying cellular
+decision-making.} During the current MIRA cycle we extended this approach
+from immune mechanobiology to TF/chromatin dynamics, developing
+single-molecule tracking (SMT) and analysis methods for the glucocorticoid
+receptor (GR), estrogen receptor (ER), the pioneer factor FOXA1, and the
+chromatin remodeler BRG1, and showed that long-residence TF events on
+chromatin are quantitatively associated with productive transcription
+(Mehta \textit{et al.}, 2022; Garcia \textit{et al.}, 2021). We further
+showed that ERs in MCF-7 cells exhibit substrate-stiffness-dependent
+shifts in chromatin-bound dynamics
+(H2B $\alpha\!\approx\!0.41$ on soft, ER $\alpha\!\approx\!0.61$),
+demonstrating that mechanical cues modulate TF/chromatin engagement at
+the level of single binding events. \textit{The natural next question is
+whether these single-molecule observables --- chromatin
+$\alpha$, free fractions, residence-time distributions --- are sufficient
+to populate the noise budget that constrains a cell's fate decision in a
+true developmental context.} Our laboratory is uniquely positioned to
+answer this question: we have an established \textbf{custom HILO
+microscope build}, a \textbf{validated SMT analysis stack}
+(\textit{smt-pipeline}: fractional Brownian fitting, pEMv2 with bootstrap
+CIs, state-array posterior decomposition, two-condition statistical
+comparison) released as open source, and a \textbf{new widefield HILO
+microscope} dedicated to live SMT in 3D-cultured tissue, currently in
+final stages of construction.
+
+\textbf{The 2D mouse gastruloid as the entry point.} The gastruloid grown
+on micropatterned (CYTOO) substrates is the cleanest mammalian system in
+which the polymer-revised Berg--Purcell bound can be tested by SMT. It
+begins as a uniform aggregate of mouse embryonic stem cells, breaks
+symmetry under defined Wnt stimulation, and acquires a Brachyury-positive
+pole opposite a Sox2-retaining domain over a tractable 24--72-hour
+window. It is geometrically defined, optically accessible, reproducible
+across replicates, and --- unlike the \textit{in vivo} mouse embryo ---
+amenable to single-molecule imaging in living tissue. Every term in the
+noise budget except the EP first-passage time itself is observable
+through SMT of histone H2B (chromatin) and of fate-relevant TFs (Sox2,
+Brachyury). H2B SMT yields the chromatin MSD exponent $\alpha$ and bounds
+the polymer first-passage timescale; Sox2 and Bra SMT yield free
+fractions, residence-time distributions, and the TF-side prefactors of
+the Berg--Purcell and Lammers terms; spatial mapping of these observables
+across the polarized axis decomposes the readout into source,
+propagation, and readout components and discriminates reaction--diffusion
+from localized-source mechanisms of axial symmetry breaking. We are
+explicitly \emph{not} proposing live two-color enhancer/promoter pair
+imaging, which requires engineered loci and orthogonal labeling chemistry
+more naturally pursued by the Gregor, Garcia, or Hansen laboratories;
+\textit{our contribution is the parallel single-molecule measurement of
+the chromatin and TF dynamics that flank the EP contact event ---
+populating noise-budget terms that two-color locus tracking does not
+resolve, and providing the quantitative calibration against which
+locus-resolved experiments in collaborating laboratories can be
+interpreted.}
+
+\textbf{Impact.} A direct single-molecule decomposition of the physical
+noise budget that constrains mammalian fate decisions has not been done.
+The result will reveal which physical bottleneck is rate-limiting in
+mammalian gastrulation, distinguish reaction--diffusion from
+localized-source axial symmetry breaking, and clarify the role of
+chromatin organization in fate specification independent of its later
+role in long-term gene-expression homeostasis. The framework and methods
+established here generalize beyond development: the same noise budget
+constrains hormone-driven transcriptional decisions in cancer (extending
+our ongoing ER work) and antigen-driven fate decisions in lymphocytes
+(extending our T-cell program), unifying the lab's three programs under
+a common biophysical principle.
+
+\end{document}

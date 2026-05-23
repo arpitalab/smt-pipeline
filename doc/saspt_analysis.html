@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>saSPT Analysis — smt-pipeline</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a class="home" href="index.html">smt-pipeline</a>
+  <a href="data_loading.html">Data Loading</a>
+  <a href="msd_analysis.html">MSD</a>
+  <a href="fbm_analysis.html">fBM</a>
+  <a href="rl_analysis.html">RL</a>
+  <a href="pem_analysis.html">pEM</a>
+  <a href="saspt_analysis.html">saSPT</a>
+  <a href="lifetime.html">Lifetime &amp; DACF</a>
+  <a href="track_filtering.html">Filtering</a>
+  <a href="struct_options.html">Struct Options</a>
+  <a href="smt_database.html">Database</a>
+</nav>
+
+<div class="page-wrap">
+
+<h1>State-Array SPT (saSPT)</h1>
+
+<p>
+The saSPT analysis ports the state-array SPT method of
+<strong>Heckert, Dahal, Tjian &amp; Darzacq (eLife 2022)</strong> into the
+smt-pipeline. Instead of fitting a few discrete diffusive states (as in
+<a href="pem_analysis.html">pEM</a>), saSPT places a dense grid over
+<code>(D, σ<sub>loc</sub>)</code> and returns a variational-Bayes posterior
+occupancy over that grid — i.e. a non-parametric estimate of the joint
+distribution of diffusion coefficient and localization precision.
+</p>
+
+<p>
+The implementation lives in <code>utils/saSPT/</code> and is wired into
+<code>TrajectoryCollection</code> via four methods:
+<code>getStateArrayPosterior</code>,
+<code>getStateArrayPosteriorBootstrap</code>,
+<code>plotStateArrayPosteriorD</code>, and
+<code>plotStateArrayPosterior2D</code>. Two-condition comparisons are done by
+<code>utils/compareStateArrayPosteriors.m</code>.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>When to use saSPT vs. pEM vs. fBM</h2>
+
+<table>
+  <thead><tr><th>Method</th><th>Use when</th><th>Returns</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>getBayesianDiffusivity</code> (pEM)</td>
+      <td>You want a small number of discrete diffusive states with fractions.</td>
+      <td>K state means + populations, BIC-selected K.</td>
+    </tr>
+    <tr>
+      <td><code>getStateArrayPosterior</code> (saSPT)</td>
+      <td>You want a non-parametric, model-comparison-friendly view of the diffusivity distribution — and you do not want to commit to a state count.</td>
+      <td>Posterior occupancy over a 2-D <code>(D, σ<sub>loc</sub>)</code> grid; marginal posterior over <code>D</code>.</td>
+    </tr>
+    <tr>
+      <td><code>getFBMParameters</code> (fBM)</td>
+      <td>You care about the anomalous exponent α (sub-/superdiffusion) of the population.</td>
+      <td>K, α, σ with profile-likelihood or MCMC CIs.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <strong>Track type:</strong> saSPT operates on <code>culled</code> tracks.
+  Do not use <code>relative</code> tracks — the saSPT model assumes the
+  observed displacements are Brownian + localization noise, which is violated
+  once cell motion has been subtracted via the spanning forest.
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>getStateArrayPosterior</h2>
+
+<div class="sig">results = tc.getStateArrayPosterior()
+results = tc.getStateArrayPosterior('Condition','Control', ...
+                                    'SplitSize',7, ...
+                                    'D',        logspace(-3,log10(20),64), ...
+                                    'LocError', linspace(0.01,0.1,24), ...
+                                    'FrameInterval',0.01, ...
+                                    'ExposureTime', 0.005)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Restrict to one or more conditions (string, cellstr, or string array). Empty = full collection.</td></tr>
+    <tr><td><code>SplitSize</code></td><td>7</td><td>Maximum sub-track length M (frames). Tracks are first cut at every frame discontinuity (gap-aware), then each gap-free run is broken into non-overlapping chunks of length 3 ≤ L ≤ M.</td></tr>
+    <tr><td><code>D</code></td><td><code>logspace(log10(1e-3), log10(20), 64)</code></td><td>1-D diffusion-coefficient grid (µm² s⁻¹). Log-spaced spanning ~10⁻³ to 20 µm²/s covers chromatin-bound through freely-diffusing nuclear proteins.</td></tr>
+    <tr><td><code>LocError</code></td><td><code>linspace(0.01, 0.1, 24)</code></td><td>Localization-precision grid (µm). Marginalizing over σ<sub>loc</sub> rather than fixing it removes a common source of bias in fast-diffusion estimates.</td></tr>
+    <tr><td><code>FrameInterval</code></td><td>auto</td><td>Sampling interval (s). Defaults to the wrappers' stored <code>FrameInterval</code> for the requested condition.</td></tr>
+    <tr><td><code>ExposureTime</code></td><td>= FrameInterval</td><td>Camera exposure (s). Used for motion-blur correction. Set to <code>0</code> to recover the static (no-blur) covariance.</td></tr>
+    <tr><td><code>ShutterR</code></td><td>1/6</td><td>Shutter coefficient (Berglund 2010). 1/6 is correct for uniform box exposure.</td></tr>
+  </tbody>
+</table>
+
+<h3>Algorithm internals</h3>
+<ol>
+  <li><strong><code>saSPT_splitTracks</code></strong> — gap-aware splitting into M-frame sub-tracks. Any frame discontinuity (<code>diff(frame) ≠ 1</code>) breaks the track before chunking, so no sub-track straddles a gap.</li>
+  <li><strong><code>saSPT_calc_likelihood</code></strong> — for each sub-track evaluates the multivariate Gaussian log-likelihood of the step vector under regular Brownian motion + isotropic Gaussian localization noise at every <code>(D, σ<sub>loc</sub>)</code> grid point. The x and y dimensions are treated as independent, so <code>log P(Δx, Δy) = log P(Δx) + log P(Δy)</code> (the 1-D normalizer is counted twice — this is the corrected version of the original Heckert <code>calc_likelihood.m</code>).</li>
+  <li>Motion-blur covariance (Berglund 2010 / Heckert 2021):
+    <pre><code>var(Δx)        = 2(D·dt + σ²) − 4·R·D·t_exp
+cov(Δx, Δx_+1) = −σ² + 2·R·D·t_exp</code></pre>
+  </li>
+  <li><strong><code>saSPT_compute_posterior</code></strong> — variational-Bayes EM (Bishop PRML Ch. 10) with a symmetric Dirichlet prior (<code>α = 1 / (LD · LL)</code>) over the grid. Iterates up to 100 times.</li>
+</ol>
+
+<h3>Result structure</h3>
+<p>Stored in <code>tc.SAStateResults</code>. Key fields:</p>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.D</code></td><td>1 × LD diffusion-coefficient grid (µm² s⁻¹).</td></tr>
+    <tr><td><code>.LocError</code></td><td>1 × LL localization-precision grid (µm).</td></tr>
+    <tr><td><code>.FrameInterval</code>, <code>.ExposureTime</code>, <code>.ShutterR</code>, <code>.SplitSize</code></td><td>Echo of the options used.</td></tr>
+    <tr><td><code>.NumTracks</code>, <code>.NumSubtracks</code></td><td>Track counts before and after splitting.</td></tr>
+    <tr><td><code>.post_occ</code></td><td>LD × LL joint posterior occupancy (sums to 1).</td></tr>
+    <tr><td><code>.post_marg_D</code></td><td>LD × 1 marginal posterior over <code>D</code> (= <code>sum(post_occ, 2)</code>).</td></tr>
+  </tbody>
+</table>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="bootstrap">getStateArrayPosteriorBootstrap</h2>
+
+<p>
+Cluster-bootstrap (or jackknife) CIs on the marginal <code>D</code> posterior.
+Resamples FOVs (or cells / equal-sized chunks) with replacement, re-runs the
+cheap posterior update, and returns per-D-bin percentile intervals. The
+expensive log-likelihood evaluation is done <em>once</em> across all
+sub-tracks and re-sliced inside the bootstrap loop, so each iteration is
+nearly free.
+</p>
+
+<div class="sig">results = tc.getStateArrayPosteriorBootstrap()
+results = tc.getStateArrayPosteriorBootstrap('Condition','Control', ...
+                                              'NumBootstraps',200, ...
+                                              'Mode','cluster', ...
+                                              'ClusterBy','fov', ...
+                                              'Parallel',true)</div>
+
+<h3>Parameters</h3>
+<table>
+  <thead><tr><th>Parameter</th><th>Default</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>Condition</code></td><td>[]</td><td>Same semantics as in <code>getStateArrayPosterior</code>.</td></tr>
+    <tr><td><code>SplitSize</code>, <code>D</code>, <code>LocError</code>, <code>FrameInterval</code>, <code>ExposureTime</code>, <code>ShutterR</code></td><td>see above</td><td>Pass-through to <code>saSPT_bootstrap_CI</code>. Match the values used by the previous <code>getStateArrayPosterior</code> call so the cached point estimate and the bootstrap CI live on the same grid.</td></tr>
+    <tr><td><code>NumBootstraps</code></td><td>200</td><td>Number of resampling iterations.</td></tr>
+    <tr><td><code>AlphaCI</code></td><td>0.05</td><td>Percentile-CI level (default 95% CI).</td></tr>
+    <tr><td><code>Mode</code></td><td><code>'cluster'</code></td><td><code>'cluster'</code> = bootstrap with replacement; <code>'jackknife'</code> = leave-one-cluster-out SE.</td></tr>
+    <tr><td><code>ClusterBy</code></td><td><code>'fov'</code></td><td>Resampling unit: <code>'fov'</code> (default), <code>'cell'</code> (one cluster per (FOV, ROI) — needs TC input + culled tracks), or <code>'chunk'</code> (equal-sized random chunks of <code>ChunkSize</code> sub-tracks).</td></tr>
+    <tr><td><code>ChunkSize</code></td><td>5000</td><td>Sub-tracks per chunk in <code>ClusterBy='chunk'</code> mode.</td></tr>
+    <tr><td><code>MinSubtracksPerCluster</code></td><td>50 for <code>'cell'</code>, 0 otherwise</td><td>Drop sparse clusters before resampling. Ignored in chunk mode.</td></tr>
+    <tr><td><code>Seed</code></td><td>[]</td><td>RNG seed.</td></tr>
+    <tr><td><code>Parallel</code></td><td>false</td><td>Use <code>parfor</code> for the bootstrap loop; auto-launches a parpool if none is open.</td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <strong>Which clustering unit?</strong>
+  <ul>
+    <li><code>'fov'</code> — default; captures FOV-to-FOV biological variability. Use when FOVs are roughly comparable in track count.</li>
+    <li><code>'cell'</code> — captures cell-to-cell variability inside FOVs. Use when cells are similarly sized; needs ROI metadata on the wrappers.</li>
+    <li><code>'chunk'</code> — equal-sized random chunks. Use when FOVs/cells are very imbalanced (e.g. 1 vs. 1000 tracks). The CI then reflects variance of the <em>variational posterior</em>, not biological clustering — interpret accordingly and don't claim it as a between-cell error bar.</li>
+  </ul>
+</div>
+
+<h3>Result fields</h3>
+<table>
+  <thead><tr><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>.D</code>, <code>.LocError</code>, <code>.FrameInterval</code>, <code>.ExposureTime</code>, <code>.ShutterR</code>, <code>.SplitSize</code>, <code>.Mode</code></td><td>Echo of options. Used by <code>plotStateArrayPosteriorD</code> to validate consistency with <code>SAStateResults</code> before plotting.</td></tr>
+    <tr><td><code>.NumFOVs</code>, <code>.NumSubtracksPerFOV</code></td><td>Cluster counts.</td></tr>
+    <tr><td><code>.post_marg_D_full</code></td><td>LD × 1 marginal posterior on the full (un-resampled) data — matches <code>SAStateResults.post_marg_D</code> when options agree.</td></tr>
+    <tr><td><code>.post_marg_D_boot</code></td><td>LD × B per-iteration marginal posteriors. Re-used by <code>compareStateArrayPosteriors</code>.</td></tr>
+    <tr><td><code>.post_marg_D_mean</code>, <code>.post_marg_D_std</code></td><td>Bootstrap mean and std (jackknife SE in jackknife mode).</td></tr>
+    <tr><td><code>.post_marg_D_CI</code></td><td>LD × 2 percentile CI <code>[lo, hi]</code>.</td></tr>
+  </tbody>
+</table>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="plot">Plotting</h2>
+
+<h3>plotStateArrayPosteriorD</h3>
+<div class="sig">fig = tc.plotStateArrayPosteriorD()
+fig = tc.plotStateArrayPosteriorD('Bootstrap', bootResults, ...
+                                  'Color', [0 0.4 0.8], 'Title', 'ER 100 kPa')</div>
+<p>
+Line plot of the marginal posterior over <code>D</code>. If a bootstrap struct
+is supplied (or the most recent one is cached on the object), the percentile
+CI is shaded and the bootstrap mean is drawn dashed. The plotter validates
+that the bootstrap was computed on the same <code>D</code>, <code>SplitSize</code>,
+<code>FrameInterval</code>, <code>ExposureTime</code>, <code>ShutterR</code>, and
+<code>Condition</code> as the cached posterior, and errors otherwise — pass
+<code>'Bootstrap'</code> explicitly or rerun the bootstrap if you hit that guard.
+</p>
+
+<h3>plotStateArrayPosterior2D</h3>
+<div class="sig">fig = tc.plotStateArrayPosterior2D('Title', 'ER 100 kPa')</div>
+<p>
+<code>pcolor</code> of the full joint posterior over
+<code>(D, σ<sub>loc</sub>)</code>. Useful as a diagnostic — a posterior that
+piles up at the σ<sub>loc</sub> grid boundary indicates the grid is too narrow.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2 id="compare">compareStateArrayPosteriors</h2>
+
+<p>
+Quantitative two-condition comparison of the marginal <code>D</code>
+posteriors. Reports:
+</p>
+<ul>
+  <li><strong>Wasserstein-1</strong> distance on <code>log10(D)</code> (in decades) — a single-number "how different are these two distributions" summary.</li>
+  <li><strong>Jensen-Shannon</strong> divergence (and its square-root, a true metric).</li>
+  <li><strong>Slow/fast fraction differences</strong> — occupancy below <code>SlowCutoff</code> and above <code>FastCutoff</code>, with paired-bootstrap CIs.</li>
+  <li><strong>Peak shift</strong> — <code>log10(peakD_B / peakD_A)</code>.</li>
+</ul>
+
+<div class="sig">out = compareStateArrayPosteriors(boot_A, boot_B, ...
+        'SlowCutoff', 0.05, 'FastCutoff', 0.5, 'AlphaCI', 0.05, 'Seed', 42)</div>
+
+<h3>Inputs</h3>
+<p>
+<code>boot_A</code> and <code>boot_B</code> are the structs returned by
+<code>getStateArrayPosteriorBootstrap</code> for each condition. The
+<code>D</code> grids must match. CIs are computed by pairing bootstrap
+iterations across conditions (random unmatched pairing) and re-evaluating
+each metric per pair, so differences carry a tighter CI than would be
+obtained by subtracting independent CIs.
+</p>
+
+<h3>Output</h3>
+<p>
+Each metric field is a struct with <code>.point</code> (full-pool point
+estimate) and <code>.CI = [lo hi]</code> (percentile CI from the bootstrap
+pairing). <strong>Recommended report:</strong> Wasserstein-1 plus the
+bound-fraction difference, both with their CIs.
+</p>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>End-to-end example</h2>
+
+<pre><code>run('setup_path.m');
+
+% --- Load both conditions into one collection ----------------------------
+tc = TrajectoryCollection();
+tc.ReadParams('experiment.toml');
+tc.loadFromFiles(dir('data/soft/*.csv'),  [], [], 'ER_1kPa');
+tc.loadFromFiles(dir('data/stiff/*.csv'), [], [], 'ER_100kPa');
+
+% --- Point posteriors (one per condition) --------------------------------
+res_soft  = tc.getStateArrayPosterior('Condition','ER_1kPa');
+res_stiff = tc.getStateArrayPosterior('Condition','ER_100kPa');
+
+% --- FOV-cluster bootstrap CIs (matched grid) ----------------------------
+boot_soft = tc.getStateArrayPosteriorBootstrap('Condition','ER_1kPa', ...
+                'NumBootstraps',200, 'Parallel',true);
+boot_stiff = tc.getStateArrayPosteriorBootstrap('Condition','ER_100kPa', ...
+                'NumBootstraps',200, 'Parallel',true);
+
+% --- Plot ----------------------------------------------------------------
+tc.plotStateArrayPosteriorD('Bootstrap', boot_soft,  ...
+    'Color',[0.2 0.6 1.0], 'Title','ER 1 kPa');
+tc.plotStateArrayPosteriorD('Bootstrap', boot_stiff, ...
+    'Color',[1.0 0.4 0.2], 'Title','ER 100 kPa');
+
+% --- Two-condition comparison with paired-bootstrap CIs ------------------
+cmp = compareStateArrayPosteriors(boot_soft, boot_stiff, ...
+        'SlowCutoff',0.05, 'FastCutoff',0.5);
+fprintf('W1 (log10 D) = %.3f  [%.3f, %.3f] decades\n', ...
+        cmp.W1_log10D.point, cmp.W1_log10D.CI(1), cmp.W1_log10D.CI(2));
+fprintf('slow frac (stiff − soft) = %+.3f  [%+.3f, %+.3f]\n', ...
+        -cmp.slowFrac_diff.point, ...        % B − A reported as stiff − soft
+        -cmp.slowFrac_diff.CI(2), -cmp.slowFrac_diff.CI(1));
+</code></pre>
+
+<!-- ════════════════════════════════════════════════════════════════════ -->
+<h2>Notes &amp; caveats</h2>
+<ul>
+  <li><strong>Brownian assumption.</strong> saSPT models each sub-track as Brownian + Gaussian noise. Anomalous (fBM) motion will be projected onto the closest Brownian state — read the marginal as an <em>effective</em> diffusivity distribution, not a kinetic decomposition. If you care about α, use <a href="fbm_analysis.html"><code>getFBMParameters</code></a> or <code>getFBMByPEMState</code> instead.</li>
+  <li><strong>Grid coverage.</strong> If the 2-D posterior piles up at the boundary of either grid, widen it. Default ranges (<code>10⁻³</code> to <code>20</code> µm²/s; <code>0.01</code> to <code>0.1</code> µm) cover typical mammalian-nucleus SMT but are not universal.</li>
+  <li><strong>SplitSize tradeoff.</strong> Larger M (e.g. 12-20) yields a sharper posterior for slow states but discards more short tracks; smaller M (default 7) keeps more sub-tracks at the cost of breadth. saSPT is not very sensitive to M in the 5-12 range for nuclear-protein SMT.</li>
+  <li><strong>Motion blur matters.</strong> For stroboscopic acquisition (your acquisition memo: 10 ms exposure / 200 ms interval ⇒ <code>exposure_fraction = 0.05</code>) the blur correction is small but non-zero. For continuous-exposure data the correction is essential and ignoring it will inflate apparent <code>D</code>.</li>
+  <li><strong>Bootstrap stale-cache guard.</strong> <code>plotStateArrayPosteriorD</code> compares the bootstrap struct's grid/options against the cached <code>SAStateResults</code> and errors on mismatch. This is intentional — silently overlaying a CI computed at different exposure/grid would be a quiet bug.</li>
+</ul>
+
+<footer>smt-pipeline docs &mdash; <a href="../README.md">README</a> for installation.</footer>
+</div>
+</body>
+</html>

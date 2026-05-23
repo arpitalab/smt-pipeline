@@ -11,6 +11,7 @@ here = fileparts(mfilename('fullpath'));
 addpath(here);
 addpath(fullfile(here, 'utils'));
 addpath(fullfile(here, 'utils', 'RL_analysis'));
+addpath(fullfile(here, 'utils', 'saSPT'));
 addpath(fullfile(here, 'third_party', 'matlab-toml'));
 
 fprintf('smt-pipeline path configured.\n');

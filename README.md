@@ -109,8 +109,15 @@ tc.save('results/H2B_E2_1kPa_200ms.mat');
 % later session:
 data = load('results/H2B_E2_1kPa_200ms.mat');
 tc   = data.tc;
-tc.reloadTracks();   % optional, ~5–10 min: rebuild RawTracks from CSVs
+tc.reloadTracks();        % optional, ~5–10 min: rebuild RawTracks from CSVs
+
+% deep copy before running new analyses so the loaded baseline stays intact:
+tc_work = tc.copy();      % independent collection; analyses on tc_work do not touch tc
 ```
+
+Pick a variable name that reflects the experiment you are about to run on the
+copy (`tc_resample`, `tc_nofilter`, `tc_E2`, etc.) — the original `tc` then
+remains a clean reference to the on-disk state.
 
 Typical file size without tracks is ~100–400 MB, dominated by
 `pEMBootstrapInputs`. Skip `reloadTracks()` if you only need analysis

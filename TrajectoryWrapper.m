@@ -90,7 +90,14 @@ classdef TrajectoryWrapper < handle
                 end
             end
             obj.RawTracks  = tracks;
-            obj.FileName   = csvFile;
+            % Store the absolute path so reloadTracks() can find the file
+            % even if the working directory has changed between sessions.
+            if isfile(csvFile)
+                fInfo = dir(csvFile);
+                obj.FileName = fullfile(fInfo.folder, fInfo.name);
+            else
+                obj.FileName = csvFile;
+            end
             obj.IsCulled   = false;
             obj.SourceType = 'csv';
             fprintf('Loaded %d trajectories.\n', length(tracks));
@@ -141,9 +148,14 @@ classdef TrajectoryWrapper < handle
             sxxx = tokens{1}{1};
 
             % Search for mask files relative to the CSV file location
-            [csvDir, ~, ~] = fileparts(obj.FileName);
-            if isempty(csvDir)
-                csvDir = pwd;
+            fileInfo = dir(obj.FileName);
+            if ~isempty(fileInfo)
+                csvDir = fileInfo(1).folder;
+            else
+                [csvDir, ~, ~] = fileparts(obj.FileName);
+                if isempty(csvDir)
+                    csvDir = pwd;
+                end
             end
             searchDir = fullfile(csvDir, '..');
 

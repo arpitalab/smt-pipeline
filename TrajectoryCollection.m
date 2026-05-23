@@ -31,6 +31,8 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
         LifetimeResults    = struct()
         FBMResults         = struct()    % Population fBM MLE (K, alpha, sigma)
         FBMAlphaResults    = struct()    % Per-track (K, alpha) distribution
+        SAStateResults     = struct()    % saSPT posterior over (D, sigma)
+        SAStateBootstrap   = struct()    % saSPT bootstrap CI result
     end
 
     properties (Access = private)
@@ -117,8 +119,11 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 tw.loadNucleusMask();
                 tw.cull_tracks();
                 tw.remove_relative_motion();
-            catch
-                warning('no nucleus file or cullable tracks');
+            catch ME
+                warning('no nucleus file or cullable tracks: %s', ME.message);
+                for kk = 1:numel(ME.stack)
+                    fprintf('  at %s (line %d)\n', ME.stack(kk).name, ME.stack(kk).line);
+                end
             end
 
             obj = obj.addWrapper(tw, 'FilePath', csvFile, ...
@@ -289,20 +294,18 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             o = p.Results;
             trackType = lower(char(o.TrackType));
 
-            % Cache is valid only if the same TrackType was used previously
-            cachedType = '';
-            if obj.IsRLComputed && isfield(obj.RLResults, 'track_type')
-                cachedType = obj.RLResults.track_type;
-            end
-            if obj.IsRLComputed && ~o.ForceRecompute && strcmp(cachedType, trackType)
+            % Cache hit only when every option matches the previous call.
+            if obj.IsRLComputed && ~o.ForceRecompute && ...
+               isfield(obj.RLResults, 'opts') && ...
+               isequaln(obj.RLResults.opts, o)
                 results = obj.RLResults;
                 return;
             end
-            if obj.IsRLComputed && ~o.ForceRecompute && ~strcmp(cachedType, trackType)
-                warning('getRLDecomposition: cached result used TrackType=''%s'' but ''%s'' requested. Pass ''ForceRecompute'',true to rerun.', ...
-                    cachedType, trackType);
-                results = obj.RLResults;
-                return;
+            if obj.IsRLComputed && ~o.ForceRecompute && ...
+               isfield(obj.RLResults, 'opts') && ...
+               ~isequaln(obj.RLResults.opts, o)
+                warning('getRLDecomposition:optsChanged', ...
+                    'Cached RL result was computed with different options; recomputing.');
             end
 
             % Retrieve tracks for the requested type
@@ -375,6 +378,7 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             obj.RLResults.frac                = o.ExposureFraction;
             obj.RLResults.track_type          = trackType;
             obj.RLResults.track_index_map     = keep_idx;   % filtered→full index translation
+            obj.RLResults.opts                = o;
             obj.IsRLComputed = true;
             results = obj.RLResults;
         end
@@ -424,6 +428,12 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             if p.Results.ForceRecompute
                 obj.IsMSDComputed = false;
                 obj.MSDResults    = struct();
+            elseif obj.IsMSDComputed && isfield(obj.MSDResults, 'opts')
+                % Invalidate cache if any option that affects the result changed.
+                if ~isequaln(obj.MSDResults.opts, o)
+                    obj.IsMSDComputed = false;
+                    obj.MSDResults    = struct();
+                end
             end
 
             if ~obj.IsMSDComputed
@@ -592,6 +602,7 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 obj.MSDResults.track_type    = trackType;
                 obj.MSDResults.n_tracks      = nTracks;
                 obj.MSDResults.min_length    = o.MinLength;
+                obj.MSDResults.opts          = o;
                 obj.IsMSDComputed = true;
 
                 fprintf('getMSD: %d tracks (MinLength=%d), dt=%.4fs, frac=%.3f, MaxLag=%d, %d bootstrap samples.\n', ...
@@ -803,6 +814,253 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             results = obj.pEMResults;
         end
 
+        %% State-array SPT posterior (Heckert et al. 2021)
+        function results = getStateArrayPosterior(obj, varargin)
+            % GETSTATEARRAYPOSTERIOR  saSPT posterior over (D, sigma) grid.
+            %
+            %   results = tc.getStateArrayPosterior()
+            %   results = tc.getStateArrayPosterior('Condition','Control', ...
+            %                                       'SplitSize',7, ...
+            %                                       'D', logspace(-3,log10(20),64), ...
+            %                                       'LocError', linspace(0.01,0.1,24), ...
+            %                                       'FrameInterval', 0.01, ...
+            %                                       'ExposureTime',  0.005)
+            %
+            %   Implements Heckert et al. eLife 2021 state-array SPT on the
+            %   collection's CULLED tracks (relative tracks are inappropriate
+            %   for fast-tracked data).  Pipeline:
+            %     1. saSPT_splitTracks   — gap-aware split into M-frame
+            %                              subtracks (gaps in frame numbers
+            %                              break the track before splitting).
+            %     2. saSPT_calc_likelihood — Brownian + iso-Gaussian noise
+            %                                log-likelihood on the grid.
+            %     3. saSPT_compute_posterior — variational-Bayes posterior.
+            %
+            %   The output struct contains the marginalized posterior
+            %   occupancy over D (post_marg_D), summed over the loc-error
+            %   axis as requested.
+            %
+            %   FrameInterval and ExposureTime default to values stored on
+            %   the wrappers for the requested condition (FrameInterval is
+            %   read from FrameInterval; ExposureTime falls back to
+            %   FrameInterval if not stored).  Motion-blur correction
+            %   (Berglund 2010 / Heckert 2021, with shutter coefficient
+            %   ShutterR — default 1/6 for uniform exposure) is applied
+            %   inside the step covariance.  Set ExposureTime=0 to recover
+            %   the static covariance.
+
+            varargin = unpack_opts(varargin{:});
+            p = inputParser;
+            addParameter(p, 'Condition',     [], @(x) ischar(x)||isstring(x)||iscell(x));
+            addParameter(p, 'SplitSize',      7, @(x) isnumeric(x)&&isscalar(x)&&x>=3);
+            addParameter(p, 'D',             logspace(log10(1e-3), log10(20), 64), @isnumeric);
+            addParameter(p, 'LocError',      linspace(0.01, 0.1, 24),               @isnumeric);
+            addParameter(p, 'FrameInterval', [], @(x) isempty(x)||(isscalar(x)&&x>0));
+            addParameter(p, 'ExposureTime',  [], @(x) isempty(x)||(isscalar(x)&&x>=0));
+            addParameter(p, 'ShutterR',     1/6, @(x) isscalar(x)&&x>=0);
+            parse(p, varargin{:});
+            opts = p.Results;
+
+            isSubset = ~isempty(opts.Condition);
+
+            fprintf('\n=== State-array SPT (saSPT) ===\n');
+            fprintf('Timestamp: %s\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+            if isSubset
+                condStr = strjoin(cellstr(opts.Condition), ', ');
+                fprintf('Restricted to condition(s): %s\n', condStr);
+                tracks = obj.getTracksByCondition(opts.Condition);
+                dt_def = obj.getFrameIntervalForCondition(opts.Condition);
+            else
+                fprintf('Analyzing full collection (%d FOVs)\n', length(obj.Wrappers));
+                tracks = obj.getAllCulledTracks();
+                dt_def = obj.getFrameIntervalForCondition([]);
+            end
+
+            if isempty(tracks)
+                warning('No culled tracks available for saSPT.');
+                results = struct();
+                fprintf('================================\n\n');
+                return;
+            end
+
+            if isempty(opts.FrameInterval)
+                opts.FrameInterval = dt_def;
+            end
+            if isnan(opts.FrameInterval) || opts.FrameInterval <= 0
+                error('FrameInterval not set — pass ''FrameInterval'' or set it on the wrappers.');
+            end
+            if isempty(opts.ExposureTime)
+                opts.ExposureTime = opts.FrameInterval;
+            end
+
+            fprintf('SplitSize=%d  |D|=%d  |loc_error|=%d  dt=%.4g s  t_exp=%.4g s  R=%.4g\n', ...
+                opts.SplitSize, numel(opts.D), numel(opts.LocError), ...
+                opts.FrameInterval, opts.ExposureTime, opts.ShutterR);
+
+            subtracks = saSPT_splitTracks(tracks, opts.SplitSize);
+            fprintf('Split %d tracks into %d subtracks (>=3 pts, gap-aware)\n', ...
+                numel(tracks), numel(subtracks));
+
+            [log_L, jumps] = saSPT_calc_likelihood(subtracks, opts.D, opts.LocError, ...
+                                                   opts.FrameInterval, opts.ExposureTime, opts.ShutterR);
+
+            [~, post_occ] = saSPT_compute_posterior(log_L, jumps, opts.D, opts.LocError);
+
+            % Keep only the small, downstream-useful quantities — the per-
+            % subtrack arrays (log_L, jumps, parentID) and the LD x LL naive
+            % grids are cheap to recompute and do not need to be persisted.
+            results = struct( ...
+                'D',             opts.D, ...
+                'LocError',      opts.LocError, ...
+                'FrameInterval', opts.FrameInterval, ...
+                'ExposureTime',  opts.ExposureTime, ...
+                'ShutterR',      opts.ShutterR, ...
+                'SplitSize',     opts.SplitSize, ...
+                'Condition',     opts.Condition, ...
+                'NumTracks',     numel(tracks), ...
+                'NumSubtracks',  numel(subtracks), ...
+                'post_occ',      post_occ, ...
+                'post_marg_D',   sum(post_occ, 2));
+
+            obj.SAStateResults = results;
+            fprintf('================================\n\n');
+        end
+
+        %% saSPT bootstrap / jackknife CIs (cluster on FOVs)
+        function results = getStateArrayPosteriorBootstrap(obj, varargin)
+            % GETSTATEARRAYPOSTERIORBOOTSTRAP  FOV-level cluster bootstrap
+            % (or leave-one-FOV-out jackknife) for the saSPT marginal D
+            % posterior.  Thin wrapper around saSPT_bootstrap_CI; see that
+            % function for parameter documentation.
+            %
+            %   results = tc.getStateArrayPosteriorBootstrap()
+            %   results = tc.getStateArrayPosteriorBootstrap( ...
+            %       'Condition','Control', 'NumBootstraps',200, ...
+            %       'ExposureTime',0.005, 'Mode','cluster')
+            %
+            % If the previous call to getStateArrayPosterior used the same
+            % grids and exposure, the point estimate (post_marg_D_full)
+            % will match the cached SAStateResults.post_marg_D.
+
+            results = saSPT_bootstrap_CI(obj, varargin{:});
+            obj.SAStateBootstrap = results;
+        end
+
+        %% Plot saSPT marginal posterior over D
+        function fig = plotStateArrayPosteriorD(obj, varargin)
+            % PLOTSTATEARRAYPOSTERIORD  Line plot of marginal posterior over D.
+            %
+            %   fig = tc.plotStateArrayPosteriorD()
+            %   fig = tc.plotStateArrayPosteriorD('Bootstrap', bootResults)
+            %   fig = tc.plotStateArrayPosteriorD('Color', [0 0.4 0.8], ...
+            %                                     'Title', 'ER 100 kPa')
+            %
+            % If a bootstrap struct (from getStateArrayPosteriorBootstrap) is
+            % supplied, the percentile CI is shaded and the bootstrap mean is
+            % drawn dashed.
+
+            if isempty(fieldnames(obj.SAStateResults))
+                error('plotStateArrayPosteriorD: run tc.getStateArrayPosterior() first.');
+            end
+
+            p = inputParser;
+            addParameter(p, 'Bootstrap', [],                @(x) isempty(x)||isstruct(x));
+            addParameter(p, 'Color',     [0 0.4 0.8],       @isnumeric);
+            addParameter(p, 'Title',     '',                @(x) ischar(x)||isstring(x));
+            parse(p, varargin{:});
+
+            r = obj.SAStateResults;
+            D = r.D;
+            y = r.post_marg_D;
+
+            bsArg = p.Results.Bootstrap;
+            if isempty(bsArg) && ~isempty(fieldnames(obj.SAStateBootstrap))
+                bsArg = obj.SAStateBootstrap;
+                % Guard against silently using a stale cached bootstrap
+                % computed for a different posterior call.  Validate the
+                % key fields that affect the posterior shape.
+                checks = { ...
+                    'D',              @(a,b) isequal(numel(a), numel(b)) && all(abs(a(:)-b(:)) < 1e-12*max(1,abs(a(:))));
+                    'SplitSize',      @isequal;
+                    'FrameInterval',  @(a,b) abs(a-b) < 1e-12;
+                    'ExposureTime',   @(a,b) abs(a-b) < 1e-12;
+                    'ShutterR',       @(a,b) abs(a-b) < 1e-12;
+                    'Condition',      @isequaln};
+                for ci = 1:size(checks,1)
+                    fname = checks{ci,1}; cmp = checks{ci,2};
+                    if isfield(r, fname) && isfield(bsArg, fname) && ...
+                       ~cmp(r.(fname), bsArg.(fname))
+                        error(['plotStateArrayPosteriorD: cached bootstrap ' ...
+                               '%s does not match SAStateResults. Pass ' ...
+                               '''Bootstrap'' explicitly or rerun ' ...
+                               'getStateArrayPosteriorBootstrap() with ' ...
+                               'matching options.'], fname);
+                    end
+                end
+            end
+
+            fig = figure;
+            hold on;
+            if ~isempty(bsArg)
+                b   = bsArg;
+                % Use the bootstrap's own D grid for its CI band and mean
+                % line so coordinates match even if the supplied bootstrap
+                % was computed on a different grid than SAStateResults.
+                Db  = b.D(:);
+                lo  = b.post_marg_D_CI(:,1);
+                hi  = b.post_marg_D_CI(:,2);
+                fill([Db; flipud(Db)], [lo; flipud(hi)], p.Results.Color, ...
+                     'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                plot(Db, b.post_marg_D_mean, '--', 'Color', p.Results.Color, ...
+                     'LineWidth', 1, 'DisplayName', 'bootstrap mean');
+                % Prefer the bootstrap's own point estimate when available
+                % — it is guaranteed to be on the same D grid as the CI.
+                if isfield(b, 'post_marg_D_full') && ~isempty(b.post_marg_D_full)
+                    D = Db;
+                    y = b.post_marg_D_full;
+                end
+            end
+            plot(D, y, '-', 'Color', p.Results.Color, 'LineWidth', 2, ...
+                 'DisplayName', 'point estimate');
+            set(gca, 'XScale', 'log');
+            xlabel('D (\mum^2 s^{-1})');
+            ylabel('Posterior occupancy');
+            grid on; box on;
+            if ~isempty(p.Results.Title)
+                title(p.Results.Title);
+            end
+            hold off;
+        end
+
+        %% Plot saSPT joint posterior over (D, LocError)
+        function fig = plotStateArrayPosterior2D(obj, varargin)
+            % PLOTSTATEARRAYPOSTERIOR2D  pcolor of joint posterior over (D, sigma).
+            %
+            %   fig = tc.plotStateArrayPosterior2D()
+            %   fig = tc.plotStateArrayPosterior2D('Title', 'ER 100 kPa')
+
+            if isempty(fieldnames(obj.SAStateResults))
+                error('plotStateArrayPosterior2D: run tc.getStateArrayPosterior() first.');
+            end
+
+            p = inputParser;
+            addParameter(p, 'Title', '', @(x) ischar(x)||isstring(x));
+            parse(p, varargin{:});
+
+            r = obj.SAStateResults;
+            fig = figure;
+            pcolor(r.D, r.LocError, r.post_occ');
+            shading interp;
+            set(gca, 'XScale', 'log');
+            xlabel('D (\mum^2 s^{-1})');
+            ylabel('Localization error \sigma (\mum)');
+            cb = colorbar;
+            ylabel(cb, 'Posterior occupancy');
+            if ~isempty(p.Results.Title)
+                title(p.Results.Title);
+            end
+        end
+
         %% Population fBM MLE  (K, alpha, sigma)
         function results = getFBMParameters(obj, varargin)
             % GETFBMPARAMETERS  Population MLE of fBM parameters via Toeplitz likelihood.
@@ -854,27 +1112,14 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             o = p.Results;
 
             trackType = lower(char(o.TrackType));
-            isSubset  = ~isempty(o.Condition) || ~strcmp(trackType, 'culled');
 
-            % Return cached result only if all fitting options match what was previously used.
-            cached_ci_method = '';
-            if obj.IsFBMComputed && isfield(obj.FBMResults, 'CI') && isstruct(obj.FBMResults.CI)
-                cached_ci_method = obj.FBMResults.CI.method;
-            elseif obj.IsFBMComputed && (~isfield(obj.FBMResults, 'CI') || isempty(obj.FBMResults.CI))
-                cached_ci_method = 'none';
-            end
-            ci_match   = strcmpi(cached_ci_method, o.CIMethod);
-            frac_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'frac') && ...
-                         obj.FBMResults.frac == o.ExposureFraction;
-            lsub_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'subtrack_length') && ...
-                         obj.FBMResults.subtrack_length == o.SubtrackLength;
-            lmin_match = obj.IsFBMComputed && isfield(obj.FBMResults, 'min_subtrack_length') && ...
-                         obj.FBMResults.min_subtrack_length == o.MinSubtrackLength;
-            mss_match  = obj.IsFBMComputed && isfield(obj.FBMResults, 'min_mean_sq_step') && ...
-                         obj.FBMResults.min_mean_sq_step == o.MinMeanSqStep;
-
-            if ~o.ForceRecompute && obj.IsFBMComputed && ~isSubset && ...
-               ci_match && frac_match && lsub_match && lmin_match && mss_match
+            % Return cached result only if every fitting option matches what
+            % was previously used.  Comparison is on the full opts struct so
+            % cache cannot silently return a result computed on a different
+            % TrackType / Condition / fitting parameter.
+            if ~o.ForceRecompute && obj.IsFBMComputed && ...
+               isfield(obj.FBMResults, 'opts') && ...
+               isequaln(obj.FBMResults.opts, o)
                 results = obj.FBMResults;
                 return;
             end
@@ -915,14 +1160,16 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             results.subtrack_length    = o.SubtrackLength;
             results.min_subtrack_length = o.MinSubtrackLength;
             results.min_mean_sq_step   = o.MinMeanSqStep;
+            results.opts               = o;
 
             fprintf('  K=%.4g µm²/s^a  alpha=%.3f  sigma=%.3f µm  loglik=%.1f  (%d subtracks)\n', ...
                 results.K, results.alpha, results.sigma, results.loglik, results.n_subtracks);
 
-            if ~isSubset
-                obj.FBMResults    = results;
-                obj.IsFBMComputed = true;
-            end
+            % Cache every result (including subsets / non-default TrackType).
+            % The opts-based cache check above prevents returning a mismatched
+            % cached struct on the next call.
+            obj.FBMResults    = results;
+            obj.IsFBMComputed = true;
         end
 
         %% Per-track (K, alpha) distribution
@@ -1001,9 +1248,10 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             o = p.Results;
 
             trackType = lower(char(o.TrackType));
-            isSubset  = ~isempty(o.Condition) || ~strcmp(trackType, 'culled');
 
-            if ~o.ForceRecompute && obj.IsFBMAlphaComputed && ~isSubset
+            if ~o.ForceRecompute && obj.IsFBMAlphaComputed && ...
+               isfield(obj.FBMAlphaResults, 'opts') && ...
+               isequaln(obj.FBMAlphaResults.opts, o)
                 results = obj.FBMAlphaResults;
                 return;
             end
@@ -1062,10 +1310,9 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 results.n_removed = 0;
             end
 
-            if ~isSubset
-                obj.FBMAlphaResults    = results;
-                obj.IsFBMAlphaComputed = true;
-            end
+            results.opts = o;
+            obj.FBMAlphaResults    = results;
+            obj.IsFBMAlphaComputed = true;
         end
 
         %% Displacement autocorrelation (DACF) diagnostic
@@ -1582,6 +1829,8 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             addParameter(p, 'resampleLevel', 'parent',  @ischar);
             addParameter(p, 'parallel',       true,     @islogical);
             addParameter(p, 'verbose',        true,     @islogical);
+            addParameter(p, 'MinPP',          0,        @isnumeric);
+            addParameter(p, 'DeltaPP',        0,        @isnumeric);
             parse(p, varargin{:});
             o = p.Results;
 
@@ -1606,7 +1855,9 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 'nRandomStarts', o.nRandomStarts, ...
                 'resampleLevel', o.resampleLevel, ...
                 'parallel',      o.parallel, ...
-                'verbose',       o.verbose);
+                'verbose',       o.verbose, ...
+                'MinPP',         o.MinPP, ...
+                'DeltaPP',       o.DeltaPP);
             toc;
 
             obj.pEMResults.ciresults = ciResults;
@@ -1831,11 +2082,33 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             fb = p.Results.FBMResults;
             if isempty(fb)
                 if ~obj.IsFBMComputed
-                    error(['plotFBMFit: no FBM results available. Either run ' ...
-                           'tc.getFBMParameters() (for culled tracks) or pass ' ...
-                           '''FBMResults'' explicitly when using TrackType=''relative''.']);
+                    error(['plotFBMFit: no FBM results available. Run ' ...
+                           'tc.getFBMParameters() or pass ''FBMResults'' explicitly.']);
                 end
                 fb = obj.FBMResults;
+
+                % Guard against silently overlaying a stale FBM (e.g. computed
+                % on culled tracks) on an MSD that was computed for a
+                % different track type / condition.  The cached FBMResults
+                % is whatever was last computed on the object — verify it
+                % matches the current MSDResults before using it.
+                msdType  = '';
+                if isfield(obj.MSDResults, 'opts'),  msdType  = lower(char(obj.MSDResults.opts.TrackType));  end
+                fbmType  = '';
+                if isfield(fb, 'track_type'),        fbmType  = lower(char(fb.track_type));                  end
+                msdCond  = []; fbmCond = [];
+                if isfield(obj.MSDResults, 'opts'),  msdCond = obj.MSDResults.opts.Condition; end
+                if isfield(fb, 'opts'),              fbmCond = fb.opts.Condition;             end
+                if ~isempty(msdType) && ~isempty(fbmType) && ~strcmp(msdType, fbmType)
+                    error(['plotFBMFit: cached FBMResults was computed on TrackType=''%s'' ' ...
+                           'but MSDResults uses TrackType=''%s''.  Pass ''FBMResults'' ' ...
+                           'explicitly (e.g. fbm = tc.getFBMParameters(...); ' ...
+                           'tc.plotFBMFit(''FBMResults'', fbm)).'], fbmType, msdType);
+                end
+                if ~isequaln(msdCond, fbmCond)
+                    error(['plotFBMFit: cached FBMResults Condition does not match ' ...
+                           'MSDResults Condition.  Pass ''FBMResults'' explicitly.']);
+                end
             end
 
             % ── MSD data ──────────────────────────────────────────────────────
@@ -2194,9 +2467,11 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 rawCounts    = cellfun(@(tw) tw.getNumRawTracks(),    obj.Wrappers);
                 culledCounts = cellfun(@(tw) tw.getNumCulledTracks(), obj.Wrappers);
                 relCounts    = cellfun(@(tw) numel(tw.getRelativeTracks()), obj.Wrappers);
+                roiCounts    = cellfun(@(tw) numel(tw.getNucleusMask()), obj.Wrappers);
                 srcTypes     = cellfun(@(tw) tw.getSourceType(),       obj.Wrappers, 'UniformOutput', false);
                 fis          = cellfun(@(tw) tw.getFrameInterval(),    obj.Wrappers);
 
+                fprintf('Total ROIs           : %d\n', sum(roiCounts));
                 fprintf('Total raw tracks     : %d\n', sum(rawCounts));
                 fprintf('Total culled tracks  : %d\n', sum(culledCounts));
                 fprintf('Total relative tracks: %d\n', sum(relCounts));
@@ -2204,11 +2479,12 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 fprintf('\nPer-wrapper details:\n');
                 for w = 1:length(obj.Wrappers)
                     fiStr = ifelse(isnan(fis(w)), 'NOT SET', sprintf('%.4f s', fis(w)));
-                    fprintf('  [%s] source=%-4s  culled=%4d  px=%.4f  dt=%s\n', ...
+                    fprintf('  [%s] source=%-4s  ROIs=%2d  culled=%4d  px=%.4f  dt=%s\n', ...
                         char(obj.Metadata.FileID(w)), srcTypes{w}, ...
-                        culledCounts(w), obj.Wrappers{w}.getPixelSize(), fiStr);
+                        roiCounts(w), culledCounts(w), obj.Wrappers{w}.getPixelSize(), fiStr);
                 end
             else
+                fprintf('Total ROIs           : 0\n');
                 fprintf('Total raw tracks     : 0\n');
                 fprintf('Total culled tracks  : 0\n');
                 fprintf('Total relative tracks: 0\n');
@@ -2306,7 +2582,7 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
             obj.IsAllCulledCollected   = false;
             obj.IsAllRelativeCollected = false;
 
-            tc = obj; %#ok<NASGU>
+            tc = obj;
             saveTCToFile(filename, tc);
             fprintf('Saved TrajectoryCollection (%d wrappers) to %s\n', ...
                 numel(obj.Wrappers), filename);
@@ -2376,8 +2652,60 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
                 nReloaded = nReloaded + 1;
             end
 
-            obj.invalidateCollections();
+            % Only reset the TC-level track caches — they must be re-collected
+            % from the wrappers.  Do NOT call invalidateCollections(): that
+            % would wipe RLResults / MSDResults / pEMResults / pEMBootstrapInputs /
+            % FBMResults that were loaded from the .mat file and are still valid
+            % (the reloaded tracks are the same tracks that produced them).
+            obj.AllRawTracks           = {};
+            obj.AllCulledTracks        = {};
+            obj.AllRelativeTracks      = {};
+            obj.IsAllRawCollected      = false;
+            obj.IsAllCulledCollected   = false;
+            obj.IsAllRelativeCollected = false;
             fprintf('Reloaded tracks for %d/%d wrappers.\n', nReloaded, numel(obj.Wrappers));
+        end
+
+        function dt = getFrameIntervalForCondition(obj, condition)
+            % Returns the frame interval (seconds) for the requested condition.
+            % Errors if any matching wrapper has FrameInterval = NaN.
+            % Warns if wrappers disagree on the value.
+
+            if isempty(condition)
+                wrappers = obj.Wrappers;
+            else
+                if ischar(condition) || isstring(condition)
+                    condition = {char(condition)};
+                end
+                matchIdx = false(size(obj.Metadata.Condition));
+                for c = condition(:)'
+                    matchIdx = matchIdx | strcmp(obj.Metadata.Condition, c);
+                end
+                wrappers = obj.Wrappers(matchIdx);
+            end
+
+            if isempty(wrappers)
+                error('TrajectoryCollection:noWrappers', ...
+                      'No wrappers found for the specified condition.');
+            end
+
+            fis = cellfun(@(tw) tw.getFrameInterval(), wrappers);
+
+            if any(isnan(fis))
+                error('TrajectoryCollection:frameIntervalNotSet', ...
+                    ['FrameInterval is NaN for %d wrapper(s). ' ...
+                     'Call tw.readParams(tomlFile) or set FrameInterval explicitly ' ...
+                     'before running analysis.'], sum(isnan(fis)));
+            end
+
+            uniqueFIs = unique(fis);
+            if numel(uniqueFIs) > 1
+                warning('TrajectoryCollection:inconsistentFrameInterval', ...
+                    'Wrappers have %d different FrameInterval values: [%s]. Using median = %.4f s.', ...
+                    numel(uniqueFIs), num2str(uniqueFIs(:)', '%.4f '), median(fis));
+            end
+
+            dt = median(fis);
         end
 
     end % public methods
@@ -2424,48 +2752,6 @@ classdef TrajectoryCollection < matlab.mixin.Copyable
 
             fprintf('Collected %d raw, %d culled, and %d relative tracks across %d FOVs.\n', ...
                 length(raw), length(culled), length(relative), nWrappers);
-        end
-
-        function dt = getFrameIntervalForCondition(obj, condition)
-            % Returns the frame interval (seconds) for the requested condition.
-            % Errors if any matching wrapper has FrameInterval = NaN.
-            % Warns if wrappers disagree on the value.
-
-            if isempty(condition)
-                wrappers = obj.Wrappers;
-            else
-                if ischar(condition) || isstring(condition)
-                    condition = {char(condition)};
-                end
-                matchIdx = false(size(obj.Metadata.Condition));
-                for c = condition(:)'
-                    matchIdx = matchIdx | strcmp(obj.Metadata.Condition, c);
-                end
-                wrappers = obj.Wrappers(matchIdx);
-            end
-
-            if isempty(wrappers)
-                error('TrajectoryCollection:noWrappers', ...
-                      'No wrappers found for the specified condition.');
-            end
-
-            fis = cellfun(@(tw) tw.getFrameInterval(), wrappers);
-
-            if any(isnan(fis))
-                error('TrajectoryCollection:frameIntervalNotSet', ...
-                    ['FrameInterval is NaN for %d wrapper(s). ' ...
-                     'Call tw.readParams(tomlFile) or set FrameInterval explicitly ' ...
-                     'before running analysis.'], sum(isnan(fis)));
-            end
-
-            uniqueFIs = unique(fis);
-            if numel(uniqueFIs) > 1
-                warning('TrajectoryCollection:inconsistentFrameInterval', ...
-                    'Wrappers have %d different FrameInterval values: [%s]. Using median = %.4f s.', ...
-                    numel(uniqueFIs), num2str(uniqueFIs(:)', '%.4f '), median(fis));
-            end
-
-            dt = median(fis);
         end
 
         function invalidateCollections(obj)
@@ -2563,6 +2849,12 @@ function curve = msd_model_curve(fp, lags, dt, frac)
 G = fp(1); sig2 = fp(2); alpha = fp(3);
 b     = (abs(1 + frac./lags).^(2+alpha) + abs(1-frac./lags).^(2+alpha) - 2) ./ (frac./lags).^2;
 curve = G / ((1+alpha)*(2+alpha)) .* ((dt.*lags).^alpha .* b - 2*(frac*dt)^alpha) + 2*sig2;
+end
+
+function saveTCToFile(filename, tc) %#ok<INUSD>
+% Helper that calls MATLAB's builtin save from a workspace where the
+% TrajectoryCollection.save method does not shadow it.
+save(filename, 'tc', '-v7.3');
 end
 
 function s = mergeStructs(s1, s2)
